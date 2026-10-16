@@ -454,6 +454,107 @@ valid_case "path-like id" 1 "state.md invalid: not found" ../real
 run "$V" rx_state_valid bad
 assert_eq "1" "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" "state_valid prints a single line"
 
+# ---------- rx_run_timeout ----------
+RT="$(cd "$(fixture_tmpdir)" && pwd -P)"
+RTO="$RT/out"
+NLX=$'\n'
+# rt <seconds> <command-string>: runs rx_run_timeout in $RT; sets RC, ELAPSED; output in $RTO.
+rt() {
+  local t0=$SECONDS
+  ( cd "$RT" && . "$LIB" && rx_run_timeout "$1" "$RTO" "$2" ) 2>"$RT/rt.err"
+  RC=$?
+  ELAPSED=$((SECONDS - t0))
+}
+rt 5 'echo hello; echo oops >&2'
+assert_eq "0" "$RC" "rx_run_timeout: success status"
+assert_eq "hello${NLX}oops" "$(cat "$RTO")" "rx_run_timeout: stdout and stderr captured"
+assert_eq "" "$(cat "$RT/rt.err")" "rx_run_timeout: nothing on the caller's stderr"
+rt 5 'echo partial; exit 7'
+assert_eq "7" "$RC" "rx_run_timeout: failure status passed through"
+assert_eq "partial" "$(cat "$RTO")" "rx_run_timeout: output of a failing command"
+rt 5 'kill -9 $$'
+assert_eq "137" "$RC" "rx_run_timeout: death by signal is the shell status, not 124"
+rt 5 'pwd; cat; echo stdin-closed'
+assert_eq "$RT${NLX}stdin-closed" "$(cat "$RTO")" "rx_run_timeout: runs in the current dir with stdin at EOF"
+rt 5 'exit 124'
+assert_eq "124" "$RC" "rx_run_timeout: command exit status 124 is passed through as is"
+printf 'old\n' > "$RTO"
+rt 5 'true'
+assert_eq "" "$(cat "$RTO")" "rx_run_timeout: outfile is truncated"
+rt 5 'printf "a b\n  \$x \"q\" '"'"'s'"'"'\n"'
+assert_eq "a b${NLX}  \$x \"q\" 's'" "$(cat "$RTO")" "rx_run_timeout: command string is passed verbatim"
+assert_eq "" "$(ls "$RT" | grep -v -E '^(out|rt.err)$')" "rx_run_timeout: no stray files next to the outfile"
+
+# timeout: 124 shortly after the limit, output so far kept, whole tree gone
+rm -f "$RT/pid1" "$RT/pid2"
+rt 1 'echo before; sh -c "sleep 31 & echo \$! > '"$RT"'/pid1; wait" & sh -c "sh -c \"sleep 32 & echo \\\$! > '"$RT"'/pid2; wait\"" & wait'
+assert_eq "124" "$RC" "rx_run_timeout: timeout status"
+[ "$ELAPSED" -le 3 ] || _rx_fail "rx_run_timeout: timeout took ${ELAPSED}s (limit 1s)"
+assert_eq "before" "$(cat "$RTO")" "rx_run_timeout: output written before the timeout is kept"
+for pf in pid1 pid2; do
+  kill -0 "$(cat "$RT/$pf" 2>/dev/null || echo 999999)" 2>/dev/null \
+    && _rx_fail "rx_run_timeout: orphan from $pf survived the timeout"
+  [ -s "$RT/$pf" ] || _rx_fail "rx_run_timeout: $pf was never written (test setup)"
+done
+assert_eq "" "$(ps ax -o command | grep -E 'sleep (1|3[0-9])$' | grep -v grep)" "rx_run_timeout: no sleep (watcher or command) left after a timeout"
+assert_eq "" "$(ls "$RT" | grep -v -E '^(out|rt.err|pid1|pid2|kids)$')" "rx_run_timeout: flag file removed after a timeout"
+
+# no watcher left after a normal run either (the limit is a marker value to find it by)
+rt 41 'true'
+assert_eq "0" "$RC" "rx_run_timeout: quick command with a long limit"
+[ "$ELAPSED" -le 2 ] || _rx_fail "rx_run_timeout: quick command took ${ELAPSED}s"
+assert_eq "" "$(ps ax -o command | grep -E 'sleep 41$' | grep -v grep)" "rx_run_timeout: watcher killed after a normal run"
+kids="$(bash -c ". '$LIB'; rx_run_timeout 42 '$RTO' true; pgrep -P \$\$ > '$RT/kids'; wc -l < '$RT/kids'" | tr -d ' ')"
+assert_eq "0" "$kids" "rx_run_timeout: no child process left behind (normal run)"
+kids="$(bash -c ". '$LIB'; rx_run_timeout 1 '$RTO' 'sleep 30'; pgrep -P \$\$ > '$RT/kids'; wc -l < '$RT/kids'" | tr -d ' ')"
+assert_eq "0" "$kids" "rx_run_timeout: no child process left behind (timeout)"
+
+# usage errors
+rt 0 true
+assert_eq "2" "$RC" "rx_run_timeout: 0 seconds is a usage error"
+assert_contains "$(cat "$RT/rt.err")" "positive integer" "rx_run_timeout: usage message"
+rt abc true
+assert_eq "2" "$RC" "rx_run_timeout: non-numeric seconds is a usage error"
+rt "" true
+assert_eq "2" "$RC" "rx_run_timeout: empty seconds is a usage error"
+( cd "$RT" && . "$LIB" && rx_run_timeout 5 "" true ) 2>/dev/null
+assert_eq "2" "$?" "rx_run_timeout: empty outfile is a usage error"
+
+# caller state: options, traps, variables, monitor mode
+state_probe='
+  trap "echo caller-int" INT
+  trap "echo caller-term" TERM
+  pid=P wpid=W rc=R secs=S out=O cmd=C had_m=H flag=F old_int=I old_term=T
+  b_o="$(set +o)"; b_t="$(trap -p)"; b_m="${-//[^m]/}"
+  rx_run_timeout 1 "'"$RTO"'" "sleep 30" ; r1=$?
+  rx_run_timeout 5 "'"$RTO"'" "exit 3"; r2=$?
+  a_o="$(set +o)"; a_t="$(trap -p)"; a_m="${-//[^m]/}"
+  [ "$b_o" = "$a_o" ] && echo opts-same || echo opts-DIFF
+  [ "$b_t" = "$a_t" ] && echo traps-same || echo traps-DIFF
+  [ "$b_m" = "$a_m" ] && echo monitor-same || echo monitor-DIFF
+  echo "$r1 $r2 $pid$wpid$rc$secs$out$cmd$had_m$flag$old_int$old_term"
+'
+got="$(bash -c ". '$LIB'; $state_probe" 2>&1)"
+assert_eq "opts-same${NLX}traps-same${NLX}monitor-same${NLX}124 3 PWRSOCHFIT" "$got" "rx_run_timeout leaves options, traps, monitor mode and variables alone"
+got="$(bash -c ". '$LIB'; set -m; $state_probe" 2>&1)"
+assert_eq "opts-same${NLX}traps-same${NLX}monitor-same${NLX}124 3 PWRSOCHFIT" "$got" "rx_run_timeout with monitor mode already on"
+got="$(bash -c ". '$LIB'; set -eu; rx_run_timeout 5 '$RTO' 'exit 4' || echo \"rc=\$?\"; rx_run_timeout 1 '$RTO' 'sleep 30' || echo \"rc=\$?\"" 2>&1)"
+assert_eq "rc=4${NLX}rc=124" "$got" "rx_run_timeout under set -eu returns the status (callers guard it)"
+
+# a TERM to the caller kills the command's group too, and the caller dies of the signal
+rm -f "$RT/pidt"
+bash -c ". '$LIB'; rx_run_timeout 30 '$RTO' 'sleep 35 & echo \$! > $RT/pidt; wait'; echo survived > '$RT/survived'" </dev/null >/dev/null 2>&1 &
+tp=$!
+n=0
+while [ ! -s "$RT/pidt" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+kill -TERM "$tp"
+wait "$tp" 2>/dev/null
+sleep 0.3
+kill -0 "$(cat "$RT/pidt" 2>/dev/null || echo 999999)" 2>/dev/null \
+  && _rx_fail "rx_run_timeout: command survived a TERM to its caller"
+[ -e "$RT/survived" ] && _rx_fail "rx_run_timeout: caller kept running after TERM"
+assert_eq "" "$(ps ax -o command | grep -E 'sleep (30|35)$' | grep -v grep)" "rx_run_timeout: nothing left after a TERM to the caller"
+
 # ---------- source hygiene ----------
 H="$(new_repo)"
 out="$(inrepo_eval "$H" 'echo x' 2>&1)"

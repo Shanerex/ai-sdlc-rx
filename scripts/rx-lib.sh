@@ -302,3 +302,80 @@ rx_state_valid() {
   done
   return 0
 }
+
+# rx_run_timeout <seconds> <outfile> <command-string>: run <command-string> with
+# `bash -c` from the CURRENT directory, stdin from /dev/null, stdout+stderr combined
+# into <outfile> (truncated first). Returns the command's exit status, or 124 when it
+# was still running after <seconds> (a positive integer; anything else, or an empty
+# <outfile>, is a usage error: message on stderr, return 2).
+#   - On timeout the command's whole process group is sent TERM, then KILL 0.2s later,
+#     so children it backgrounded die with it (a descendant that moves itself into
+#     another session or process group escapes). Output written before the kill stays
+#     in <outfile>.
+#   - The command runs as a job under monitor mode (`set -m`), which is how it gets its
+#     own process group on bash 3.2 (no `timeout`/`setsid` on macOS); a watcher job
+#     enforces the limit. Both are reaped before returning: no stray processes are left
+#     behind except what the command itself leaves running after a normal exit.
+#   - A flag file `<outfile>.timeout` exists only while a timeout is being handled.
+#   - Caller state is restored: monitor mode, and the INT/TERM traps (they are replaced
+#     while it runs so that a signal to the caller also kills the command's group, then
+#     the signal is re-raised once the caller's traps are back). Never sets -e/-u,
+#     IFS or any variable; all of its own variables are local. Safe under `set -e`/-u
+#     (it only returns the status; the caller decides what to do with it).
+# Usage: rx_run_timeout 600 "$tmp" "$cmd"; rc=$?
+rx_run_timeout() {
+  local secs="${1-}" out="${2-}" cmd="${3-}" had_m=0 pid wpid rc=0 flag old_int old_term
+  case "$secs" in
+    ''|*[!0123456789]*|0|00*)
+      printf 'rx: rx_run_timeout: seconds must be a positive integer\n' >&2
+      return 2
+      ;;
+  esac
+  if [ -z "$out" ]; then
+    printf 'rx: rx_run_timeout: missing output file\n' >&2
+    return 2
+  fi
+  flag="$out.timeout"
+  rm -f "$flag"
+  case "$-" in *m*) had_m=1 ;; esac
+  old_int="$(trap -p INT)"
+  old_term="$(trap -p TERM)"
+  set -m
+  bash -c "$cmd" </dev/null >"$out" 2>&1 &
+  pid=$!
+  (
+    sleep "$secs"
+    : > "$flag"
+    kill -TERM -- "-$pid" 2>/dev/null
+    sleep 0.2
+    kill -KILL -- "-$pid" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
+  wpid=$!
+  trap "_rx_rt_abort INT $pid $wpid" INT
+  trap "_rx_rt_abort TERM $pid $wpid" TERM
+  { wait "$pid"; } 2>/dev/null && rc=0 || rc=$?
+  if [ -e "$flag" ]; then
+    { wait "$wpid"; } 2>/dev/null || true
+    rm -f "$flag"
+    rc=124
+  else
+    kill -KILL -- "-$wpid" 2>/dev/null || true
+    { wait "$wpid"; } 2>/dev/null || true
+  fi
+  trap - INT TERM
+  [ -z "$old_int" ] || eval "$old_int"
+  [ -z "$old_term" ] || eval "$old_term"
+  [ "$had_m" -eq 1 ] || set +m
+  return "$rc"
+}
+
+# _rx_rt_abort <signal> <pid> <watcher-pid>: INT/TERM handler of rx_run_timeout. Kills
+# both process groups, puts the caller's traps back (it reads old_int/old_term from
+# the running rx_run_timeout frame) and re-raises the signal on the shell.
+_rx_rt_abort() {
+  kill -KILL -- "-$2" "-$3" 2>/dev/null
+  trap - INT TERM
+  [ -z "$old_int" ] || eval "$old_int"
+  [ -z "$old_term" ] || eval "$old_term"
+  kill -s "$1" $$
+}

@@ -97,9 +97,6 @@ assert_eq "2" "$RC" "no subcommand: rc 2"
 run_check "$R" bogus
 assert_contains "$ERR" "usage: rx-check.sh" "unknown subcommand: usage"
 assert_eq "2" "$RC" "unknown subcommand: rc 2"
-run_check "$R" done
-assert_eq "rx-check: 'done' not implemented" "$ERR" "done: not implemented message"
-assert_eq "2" "$RC" "done: rc 2"
 run_check "$R" specs a b
 assert_contains "$ERR" "usage: rx-check.sh" "specs with two args: usage"
 assert_eq "2" "$RC" "specs with two args: rc 2"

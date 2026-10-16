@@ -7,9 +7,16 @@
 #                       with base_branch, working tree and untracked files included) may
 #                       only touch code, its own specs/<id>/ and NEW files under
 #                       docs/knowledge/{decisions,learnings}/
-#   done                (not implemented yet)
-# Exit codes: 0 clean, 1 violations (one `<path>: <reason>` line each on stdout),
-# 2 usage or install error (message on stderr).
+#   done [feature-id]   close-out gate: runs specs and shared for the id, then requires
+#                       g1/g2/g3 approved, every task in tasks.md/quick.md ticked, and
+#                       test_cmd and lint_cmd (if set) to exit 0 within test_timeout
+#                       seconds (default 600; a timed-out command's process tree is
+#                       killed). All checks always run and all violations are reported.
+#                       bump only has to be a valid value (none is an explicit choice);
+#                       coverage is not checked.
+# Exit codes: 0 clean, 1 violations (one `<path>: <reason>` line each on stdout, a failing
+# command's output tail follows its line, each line prefixed `  | `), 2 usage or install
+# error (message on stderr).
 # Targets macOS bash 3.2 + BSD userland. Deliberately no `set -e`.
 # Each subcommand is a function _chk_<name> in this file; add new ones to the
 # dispatcher at the bottom.
@@ -21,6 +28,14 @@ if [ ! -f "$SCRIPT_DIR/rx-lib.sh" ] || ! . "$SCRIPT_DIR/rx-lib.sh"; then
 fi
 # The checks are byte-oriented: under a UTF-8 locale BSD tr/sed abort at the first
 # invalid byte and bash =~ fails on it, which would turn into false passes/fails.
+# `done` runs the user's own commands, which must see the user's locale: keep the original.
+if [ "${LC_ALL+set}" = set ]; then
+  CHK_ORIG_LC_ALL="$LC_ALL"
+  CHK_ORIG_LC_ALL_SET=1
+else
+  CHK_ORIG_LC_ALL=""
+  CHK_ORIG_LC_ALL_SET=0
+fi
 export LC_ALL=C
 rx_noop_unless_enabled
 
@@ -496,7 +511,146 @@ _chk_shared() {
   return 1
 }
 
-_chk_done() { _chk_not_implemented done; }
+# ---------------------------------------------------------------- done
+
+# _chk_dv <path-and-reason>: record a violation line of `done` (already formatted).
+DN_V=""
+_chk_dv() {
+  DN_V="${DN_V}${1}"$'\n'
+}
+
+# _chk_done_tasks <id>: every task line of tasks.md / quick.md must be ticked, and there
+# must be at least one task somewhere. Malformed task lines are reported by `specs`.
+_chk_done_tasks() {
+  local id="$1" d="$CHK_ROOT/specs/$1" f line found=0 count
+  local re='^- \[([ x])\] T-([0-9]+)'
+  for f in tasks.md quick.md; do
+    [ -f "$d/$f" ] || continue
+    found=1
+    count=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      if [[ $line =~ $re ]]; then
+        count=$((count + 1))
+        if [ "${BASH_REMATCH[1]}" = " " ]; then
+          _chk_dv "specs/${id}/${f}: T-${BASH_REMATCH[2]} not done"
+        fi
+      fi
+    done < "$d/$f"
+    if [ "$count" -eq 0 ]; then
+      _chk_dv "specs/${id}/${f}: no tasks found"
+    fi
+  done
+  if [ "$found" -eq 0 ]; then
+    _chk_dv "specs/${id}: no tasks.md or quick.md"
+  fi
+}
+
+# _chk_done_cmd <label> <key> <command>: run a user command from the repo root with the
+# user's original locale, limited to DN_TIMEOUT seconds; record a violation on failure.
+# DN_TMP (global: the EXIT trap uses it) holds the combined output.
+_chk_done_cmd() {
+  local label="$1" key="$2" cmd="$3" rc tail
+  if [ "$CHK_ORIG_LC_ALL_SET" -eq 1 ]; then
+    LC_ALL="$CHK_ORIG_LC_ALL"
+  else
+    unset LC_ALL
+  fi
+  rx_run_timeout "$DN_TIMEOUT" "$DN_TMP/out" "$cmd"
+  rc=$?
+  export LC_ALL=C
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  if [ "$rc" -eq 124 ]; then
+    _chk_dv "${label}: ${key} timed out after ${DN_TIMEOUT}s"
+    return 0
+  fi
+  _chk_dv "${label}: ${key} failed (exit ${rc})"
+  tail="$(tr -d '\r' < "$DN_TMP/out" | tail -n 15 | sed 's/^/  | /')"
+  if [ -n "$tail" ]; then
+    _chk_dv "$tail"
+  fi
+}
+
+# _chk_done [feature-id]
+_chk_done() {
+  local id out rc g v test_cmd lint_cmd
+  if [ "$#" -gt 1 ]; then
+    _chk_usage
+  fi
+  CHK_ROOT="$(rx_root)"
+  if [ "$#" -eq 1 ]; then
+    if ! _rx_valid_id "$1"; then
+      printf "rx-check: invalid feature id '%s'\n" "$1" >&2
+      exit 2
+    fi
+    id="$1"
+  else
+    id="$(rx_feature_id)" || id=""
+    if [ -z "$id" ]; then
+      printf 'rx-check: done needs a feature id (none resolved); pass one explicitly\n' >&2
+      exit 2
+    fi
+  fi
+
+  # configuration first, so that an environment error costs nothing
+  test_cmd="$(rx_require_cfg test_cmd)" || exit 2
+  lint_cmd="$(rx_cfg lint_cmd)"
+  DN_TIMEOUT="$(rx_cfg test_timeout 600)"
+  case "$DN_TIMEOUT" in
+    ''|*[!0123456789]*|0*|??????????*)
+      printf "rx-check: invalid test_timeout '%s' (expected a positive integer number of seconds)\n" "$DN_TIMEOUT" >&2
+      exit 2
+      ;;
+  esac
+  # DN_TMP is global: the EXIT trap runs after this function has returned.
+  DN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/rx-done.XXXXXX")" || {
+    printf 'rx-check: cannot create a temp dir\n' >&2
+    exit 2
+  }
+  trap 'rm -rf "$DN_TMP"' EXIT
+  DN_TMP="$(cd "$DN_TMP" && pwd -P)" || exit 2
+
+  # a. specs and b. shared, in subshells: their violation lines are captured verbatim and
+  # their exit 2 (message already on stderr) aborts `done` the same way.
+  out="$(_chk_specs "$id")"
+  rc=$?
+  [ "$rc" -ne 2 ] || exit 2
+  [ -z "$out" ] || _chk_dv "$out"
+  out="$(_chk_shared "$id")"
+  rc=$?
+  [ "$rc" -ne 2 ] || exit 2
+  [ -z "$out" ] || _chk_dv "$out"
+
+  # c. gates (state.md validity itself is part of the specs output)
+  for g in g1 g2 g3; do
+    v="$(rx_state_get "$id" "$g")" || v=""
+    case "$v" in
+      approved:*) ;;
+      *) _chk_dv "specs/${id}/state.md: ${g} not approved" ;;
+    esac
+  done
+
+  # d. tasks
+  _chk_done_tasks "$id"
+
+  # e. tests and f. lint, from the repo root
+  cd "$CHK_ROOT" || {
+    printf 'rx-check: cannot enter %s\n' "$CHK_ROOT" >&2
+    exit 2
+  }
+  _chk_done_cmd tests test_cmd "$test_cmd"
+  if [ -n "$lint_cmd" ]; then
+    _chk_done_cmd lint lint_cmd "$lint_cmd"
+  fi
+
+  if [ -n "$DN_V" ]; then
+    printf '%s' "$DN_V"
+    return 1
+  fi
+  return 0
+}
 
 # ---------------------------------------------------------------- dispatcher
 
