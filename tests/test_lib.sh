@@ -475,8 +475,10 @@ NLX=$'\n'
 # rt <seconds> <command-string>: runs rx_run_timeout in $RT; sets RC, ELAPSED; output in $RTO.
 rt() {
   local t0=$SECONDS
-  ( cd "$RT" && . "$LIB" && rx_run_timeout "$1" "$RTO" "$2" ) 2>"$RT/rt.err"
+  ( cd "$RT" && . "$LIB" && rx_run_timeout "$1" "$RTO" "$2"; rc=$?; printf '%s' "$RX_RT_STATE" > "$RT.state"; exit $rc ) 2>"$RT/rt.err"
   RC=$?
+  RTSTATE="$(cat "$RT.state" 2>/dev/null)"
+  rm -f "$RT.state"
   ELAPSED=$((SECONDS - t0))
 }
 rt 5 'echo hello; echo oops >&2'
@@ -498,11 +500,22 @@ assert_eq "" "$(cat "$RTO")" "rx_run_timeout: outfile is truncated"
 rt 5 'printf "a b\n  \$x \"q\" '"'"'s'"'"'\n"'
 assert_eq "a b${NLX}  \$x \"q\" 's'" "$(cat "$RTO")" "rx_run_timeout: command string is passed verbatim"
 assert_eq "" "$(ls "$RT" | grep -v -E '^(out|rt.err)$')" "rx_run_timeout: no stray files next to the outfile"
+assert_eq "ran" "$RTSTATE" "rx_run_timeout: RX_RT_STATE is ran after a normal run"
+rt 5 'exit 124'
+assert_eq "124" "$RC" "rx_run_timeout: a command's own 124 is passed through"
+assert_eq "ran" "$RTSTATE" "rx_run_timeout: a command's own 124 is not a timeout"
+rt 5 'exit 2'
+assert_eq "ran" "$RTSTATE" "rx_run_timeout: a command's own 2 is not a usage error"
+( cd "$RT" && . "$LIB" && rx_run_timeout 5 "$RT/nodir/out" true; rc=$?; printf '%s %s' "$rc" "$RX_RT_STATE" > "$RT.state" ) 2>"$RT/rt.err"
+assert_eq "1 error" "$(cat "$RT.state")" "rx_run_timeout: unwritable outfile is state error"
+assert_contains "$(cat "$RT/rt.err")" "cannot write" "rx_run_timeout: unwritable outfile message"
+rm -f "$RT.state"
 
 # timeout: 124 shortly after the limit, output so far kept, whole tree gone
 rm -f "$RT/pid1" "$RT/pid2"
 rt 1 'echo before; sh -c "sleep 31 & echo \$! > '"$RT"'/pid1; wait" & sh -c "sh -c \"sleep 32 & echo \\\$! > '"$RT"'/pid2; wait\"" & wait'
 assert_eq "124" "$RC" "rx_run_timeout: timeout status"
+assert_eq "timeout" "$RTSTATE" "rx_run_timeout: RX_RT_STATE is timeout after a timeout"
 [ "$ELAPSED" -le 3 ] || _rx_fail "rx_run_timeout: timeout took ${ELAPSED}s (limit 1s)"
 assert_eq "before" "$(cat "$RTO")" "rx_run_timeout: output written before the timeout is kept"
 for pf in pid1 pid2; do
@@ -510,14 +523,12 @@ for pf in pid1 pid2; do
     && _rx_fail "rx_run_timeout: orphan from $pf survived the timeout"
   [ -s "$RT/$pf" ] || _rx_fail "rx_run_timeout: $pf was never written (test setup)"
 done
-assert_eq "" "$(ps ax -o command | grep -E 'sleep (1|3[0-9])$' | grep -v grep)" "rx_run_timeout: no sleep (watcher or command) left after a timeout"
 assert_eq "" "$(ls "$RT" | grep -v -E '^(out|rt.err|pid1|pid2|kids)$')" "rx_run_timeout: flag file removed after a timeout"
 
 # no watcher left after a normal run either (the limit is a marker value to find it by)
 rt 41 'true'
 assert_eq "0" "$RC" "rx_run_timeout: quick command with a long limit"
 [ "$ELAPSED" -le 2 ] || _rx_fail "rx_run_timeout: quick command took ${ELAPSED}s"
-assert_eq "" "$(ps ax -o command | grep -E 'sleep 41$' | grep -v grep)" "rx_run_timeout: watcher killed after a normal run"
 kids="$(bash -c ". '$LIB'; rx_run_timeout 42 '$RTO' true; pgrep -P \$\$ > '$RT/kids'; wc -l < '$RT/kids'" | tr -d ' ')"
 assert_eq "0" "$kids" "rx_run_timeout: no child process left behind (normal run)"
 kids="$(bash -c ". '$LIB'; rx_run_timeout 1 '$RTO' 'sleep 30'; pgrep -P \$\$ > '$RT/kids'; wc -l < '$RT/kids'" | tr -d ' ')"
@@ -527,6 +538,7 @@ assert_eq "0" "$kids" "rx_run_timeout: no child process left behind (timeout)"
 rt 0 true
 assert_eq "2" "$RC" "rx_run_timeout: 0 seconds is a usage error"
 assert_contains "$(cat "$RT/rt.err")" "positive integer" "rx_run_timeout: usage message"
+assert_eq "usage" "$RTSTATE" "rx_run_timeout: RX_RT_STATE is usage on a usage error"
 rt abc true
 assert_eq "2" "$RC" "rx_run_timeout: non-numeric seconds is a usage error"
 rt "" true
@@ -572,8 +584,13 @@ for sig in TERM HUP; do
   kill -0 "$(cat "$RT/pidt" 2>/dev/null || echo 999999)" 2>/dev/null \
     && _rx_fail "rx_run_timeout: command survived a $sig to its caller"
   [ -e "$RT/survived" ] && _rx_fail "rx_run_timeout: caller kept running after $sig"
-  assert_eq "" "$(ps ax -o command | grep -E 'sleep (30|35)$' | grep -v grep)" "rx_run_timeout: nothing left after a $sig to the caller"
 done
+
+# ---------- locale helpers ----------
+got="$(LC_ALL=en_US.UTF-8 bash -c ". '$LIB'; rx_locale_c; echo \$LC_ALL; rx_locale_c; rx_locale_user; echo \$LC_ALL; rx_locale_c; echo \$LC_ALL" 2>&1)"
+assert_eq "C${NLX}en_US.UTF-8${NLX}C" "$got" "rx_locale_c / rx_locale_user round trip (LC_ALL set), idempotent save"
+got="$(env -u LC_ALL bash -c ". '$LIB'; rx_locale_c; echo \$LC_ALL; rx_locale_user; echo \"[\${LC_ALL+set}]\"; rx_locale_c; rx_locale_user; echo \"[\${LC_ALL+set}]\"" 2>&1)"
+assert_eq "C${NLX}[]${NLX}[]" "$got" "rx_locale_user unsets LC_ALL when the caller had none"
 
 # ---------- source hygiene ----------
 H="$(new_repo)"

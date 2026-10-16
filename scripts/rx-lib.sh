@@ -337,9 +337,15 @@ _rx_glob_re() {
 # characters including `/`, `*` and `?` never cross `/`; nothing else is special. bash 3.2
 # has no globstar, so entries are translated to EREs by _rx_glob_re.
 rx_glob_match() {
-  local path="${1-}" globs entry re rest
+  rx_glob_match_key source_globs "${1-}"
+}
+
+# rx_glob_match_key <config-key> <repo-relative-path>: same, for any config key holding a
+# glob list in the format above (e.g. test_globs).
+rx_glob_match_key() {
+  local path="${2-}" globs entry re rest
   path="${path#./}"
-  globs="$(rx_cfg source_globs)"
+  globs="$(rx_cfg "${1-}")"
   [ -n "$globs" ] || return 1
   rest="$globs"
   while [ -n "$rest" ]; do
@@ -358,11 +364,46 @@ rx_glob_match() {
   return 1
 }
 
+# rx_locale_c / rx_locale_user: the rx checks are byte-oriented (under a UTF-8 locale BSD
+# tr/sed abort at the first invalid byte and bash =~ fails on it), so a script calls
+# rx_locale_c once after sourcing this file. Commands that belong to the user (test_cmd,
+# lint_cmd) must see the caller's own locale: wrap them in rx_locale_user ... rx_locale_c.
+# The caller's original LC_ALL (set or unset) is saved by the first rx_locale_c only.
+rx_locale_c() {
+  if [ "${RX_LC_SAVED-0}" != 1 ]; then
+    if [ "${LC_ALL+set}" = set ]; then
+      RX_LC_ORIG="$LC_ALL"
+      RX_LC_ORIG_SET=1
+    else
+      RX_LC_ORIG=""
+      RX_LC_ORIG_SET=0
+    fi
+    RX_LC_SAVED=1
+  fi
+  export LC_ALL=C
+  return 0
+}
+
+rx_locale_user() {
+  [ "${RX_LC_SAVED-0}" = 1 ] || return 0
+  if [ "$RX_LC_ORIG_SET" -eq 1 ]; then
+    export LC_ALL="$RX_LC_ORIG"
+  else
+    unset LC_ALL
+  fi
+  return 0
+}
+
 # rx_run_timeout <seconds> <outfile> <command-string>: run <command-string> with
 # `bash -c` from the CURRENT directory, stdin from /dev/null, stdout+stderr combined
 # into <outfile> (truncated first). Returns the command's exit status, or 124 when it
 # was still running after <seconds> (a positive integer; anything else, or an empty
-# <outfile>, is a usage error: message on stderr, return 2).
+# <outfile>, is a usage error: message on stderr, return 2; an unwritable <outfile>
+# returns 1). The returned status alone is ambiguous (a command can exit 2 or 124 by
+# itself), so it also sets the global RX_RT_STATE: ran | timeout | usage | error. Callers
+# that must tell a timeout from a command's own 124 test RX_RT_STATE, not the status.
+#   - Call it from the top-level shell of a script, not inside `$(...)`: a signal to the
+#     caller is re-raised on `$$`, which is the top-level shell even from a subshell.
 #   - On timeout the command's whole process group is sent TERM, then KILL 0.2s later,
 #     so children it backgrounded die with it (a descendant that moves itself into
 #     another session or process group escapes). Output written before the kill stays
@@ -374,8 +415,8 @@ rx_glob_match() {
 #   - A flag file `<outfile>.timeout` exists only while a timeout is being handled.
 #   - Caller state is restored: monitor mode, and the INT/TERM/HUP/QUIT traps (they are replaced
 #     while it runs so that a signal to the caller also kills the command's group, then
-#     the signal is re-raised once the caller's traps are back). Never sets -e/-u,
-#     IFS or any variable; all of its own variables are local. Safe under `set -e`/-u
+#     the signal is re-raised once the caller's traps are back). Never sets -e/-u or
+#     IFS; RX_RT_STATE is its only global; all other variables are local. Safe under `set -e`/-u
 #     (it only returns the status; the caller decides what to do with it).
 # Usage: rx_run_timeout 600 "$tmp" "$cmd"; rc=$?
 rx_run_timeout() {
@@ -383,12 +424,19 @@ rx_run_timeout() {
   case "$secs" in
     ''|*[!0123456789]*|0|00*)
       printf 'rx: rx_run_timeout: seconds must be a positive integer\n' >&2
+      RX_RT_STATE=usage
       return 2
       ;;
   esac
   if [ -z "$out" ]; then
     printf 'rx: rx_run_timeout: missing output file\n' >&2
+    RX_RT_STATE=usage
     return 2
+  fi
+  if ! : > "$out" 2>/dev/null; then
+    printf 'rx: rx_run_timeout: cannot write %s\n' "$out" >&2
+    RX_RT_STATE=error
+    return 1
   fi
   flag="$out.timeout"
   rm -f "$flag"
@@ -415,11 +463,12 @@ rx_run_timeout() {
   { wait "$pid"; } 2>/dev/null && rc=0 || rc=$?
   if [ -e "$flag" ]; then
     { wait "$wpid"; } 2>/dev/null || true
-    rm -f "$flag"
     rc=124
+    RX_RT_STATE=timeout
   else
     kill -KILL -- "-$wpid" 2>/dev/null || true
     { wait "$wpid"; } 2>/dev/null || true
+    RX_RT_STATE=ran
   fi
   trap - INT TERM HUP QUIT
   [ -z "$old_int" ] || eval "$old_int"
@@ -427,6 +476,9 @@ rx_run_timeout() {
   [ -z "$old_hup" ] || eval "$old_hup"
   [ -z "$old_quit" ] || eval "$old_quit"
   [ "$had_m" -eq 1 ] || set +m
+  # Monitor mode is back to the caller's setting, so this rm cannot take the terminal
+  # as a foreground job. The watcher is reaped, so nobody can create the flag after this.
+  rm -f "$flag"
   return "$rc"
 }
 
@@ -435,6 +487,7 @@ rx_run_timeout() {
 # old_quit from the running rx_run_timeout frame) and re-raises the signal on the shell.
 _rx_rt_abort() {
   kill -KILL -- "-$2" "-$3" 2>/dev/null
+  rm -f "$flag"
   trap - INT TERM HUP QUIT
   [ -z "$old_int" ] || eval "$old_int"
   [ -z "$old_term" ] || eval "$old_term"

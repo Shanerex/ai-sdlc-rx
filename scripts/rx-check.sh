@@ -32,17 +32,8 @@ if [ ! -f "$SCRIPT_DIR/rx-lib.sh" ] || ! . "$SCRIPT_DIR/rx-lib.sh"; then
   printf 'rx-check: rx-lib.sh not found\n' >&2
   exit 2
 fi
-# The checks are byte-oriented: under a UTF-8 locale BSD tr/sed abort at the first
-# invalid byte and bash =~ fails on it, which would turn into false passes/fails.
-# `done` runs the user's own commands, which must see the user's locale: keep the original.
-if [ "${LC_ALL+set}" = set ]; then
-  CHK_ORIG_LC_ALL="$LC_ALL"
-  CHK_ORIG_LC_ALL_SET=1
-else
-  CHK_ORIG_LC_ALL=""
-  CHK_ORIG_LC_ALL_SET=0
-fi
-export LC_ALL=C
+# The checks are byte-oriented (see rx_locale_c); user commands run under rx_locale_user.
+rx_locale_c
 rx_noop_unless_enabled
 
 _chk_usage() {
@@ -676,18 +667,14 @@ _chk_done_tasks() {
 # DN_TMP (global: the EXIT trap uses it) holds the combined output.
 _chk_done_cmd() {
   local label="$1" key="$2" cmd="$3" rc tail
-  if [ "$CHK_ORIG_LC_ALL_SET" -eq 1 ]; then
-    LC_ALL="$CHK_ORIG_LC_ALL"
-  else
-    unset LC_ALL
-  fi
+  rx_locale_user
   rx_run_timeout "$DN_TIMEOUT" "$DN_TMP/out" "$cmd"
   rc=$?
-  export LC_ALL=C
+  rx_locale_c
   if [ "$rc" -eq 0 ]; then
     return 0
   fi
-  if [ "$rc" -eq 124 ]; then
+  if [ "$RX_RT_STATE" = timeout ]; then
     _chk_dv "${label}: ${key} timed out after ${DN_TIMEOUT}s"
     return 0
   fi

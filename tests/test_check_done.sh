@@ -157,6 +157,9 @@ R="$(fresh "test_cmd=sh $SCR/emit.sh 15 1")"
 run_check "$R" done
 assert_eq "15" "$(printf '%s\n' "$OUT" | grep -c '^  | ')" "exactly 15 tail lines"
 assert_eq "tests: test_cmd failed (exit 1)" "$(printf '%s\n' "$OUT" | sed -n 1p)" "header first"
+R="$(fresh 'test_cmd=exit 124')"
+run_check "$R" done
+fail_case "test_cmd exits 124 by itself: a failure, not a timeout" "tests: test_cmd failed (exit 124)"
 R="$(fresh 'test_cmd=exit 5')"
 run_check "$R" done
 fail_case "test_cmd fails with no output" "tests: test_cmd failed (exit 5)"
