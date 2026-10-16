@@ -163,6 +163,17 @@ assert_eq "" "$OUT" "rx_die nothing on stdout"
 out="$(inrepo_eval "$C" 'rx_die x; echo AFTER' 2>/dev/null)"
 assert_eq "" "$out" "rx_die stops the caller"
 
+# rx_die exits only the current shell: inside $(...) the caller must add `|| exit 2`.
+out="$(inrepo_eval "$C" 'x="$(rx_require_cfg missing 2>/dev/null)" || exit 2; echo AFTER' 2>&1)"; rc=$?
+assert_eq "2" "$rc" "x=\"\$(rx_require_cfg k)\" || exit 2 exits the script with 2"
+assert_eq "" "$out" "later command does not run after || exit 2"
+out="$(inrepo_eval "$C" 'x="$(rx_require_cfg missing 2>/dev/null)"; rc=$?; echo "AFTER rc=$rc x=[$x]"' 2>&1)"; rc=$?
+assert_eq "0" "$rc" "without || exit 2 the caller keeps running"
+assert_eq "AFTER rc=2 x=[]" "$out" "without || exit 2 the caller sees rc=2 and empty x (documented caveat)"
+out="$(inrepo_eval "$C" 'rx_require_cfg missing >/dev/null 2>&1; echo AFTER' 2>&1)"; rc=$?
+assert_eq "2" "$rc" "bare rx_require_cfg call exits the script with 2"
+assert_eq "" "$out" "bare rx_require_cfg call stops the script"
+
 # ---------- rx_feature_id ----------
 F="$(new_repo)"
 fid_case() { # <message> <branch|-> <config-content|-> <expected> <expected-rc>

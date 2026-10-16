@@ -35,8 +35,10 @@ rx_noop_unless_enabled() {
   return 0
 }
 
-# rx_die <msg>: print `rx: <msg>` to stderr and `exit 2`. This exits the
-# CALLER's shell (the sourcing script), not just the function.
+# rx_die <msg>: print `rx: <msg>` to stderr and `exit 2`. It exits only the
+# CURRENT shell: called directly from the sourcing script it ends the script,
+# but inside $(...) or a pipeline it ends just that subshell and the script
+# keeps running. Capture with `x="$(...)" || exit 2` (see rx_require_cfg).
 rx_die() {
   printf 'rx: %s\n' "$*" >&2
   exit 2
@@ -110,7 +112,11 @@ rx_cfg() {
 }
 
 # rx_require_cfg <key>: print the value and return 0 if non-empty, else rx_die
-# (which exits the caller's shell with status 2).
+# (message on stderr, exit 2 of the CURRENT shell). A bare call at script level,
+# e.g. `rx_require_cfg k >/dev/null`, exits the script. Inside command
+# substitution only the subshell exits, so the caller MUST write
+#   x="$(rx_require_cfg k)" || exit 2
+# otherwise it continues with rc=2 and an empty x.
 rx_require_cfg() {
   local v
   v="$(rx_cfg "${1-}")"
