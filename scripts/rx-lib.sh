@@ -137,36 +137,45 @@ _rx_valid_id() {
   return 0
 }
 
-# rx_feature_id: print the active feature id and return 0, else print nothing
-# and return 1. Order: (a) current branch matched against branch_pattern
-# (default feature/{id}; one `{id}` placeholder, plain string stripping, never a
-# regex), (b) first line of <root>/.rx/local/active. Ids must be valid per
-# _rx_valid_id. Detached HEAD, rebase and non-git all fall through to (b).
-rx_feature_id() {
-  local pattern branch prefix suffix id root line
+# rx_branch_id <branch>: print the feature id that <branch> encodes under
+# branch_pattern (default feature/{id}; one `{id}` placeholder, plain string
+# stripping, never a regex) and return 0. Print nothing and return 1 if the
+# pattern lacks exactly one `{id}`, the branch does not match, or the id is
+# not valid per _rx_valid_id.
+rx_branch_id() {
+  local branch="${1-}" pattern prefix suffix id
+  [ -n "$branch" ] || return 1
   pattern="$(rx_cfg branch_pattern 'feature/{id}')"
-  branch="$(git symbolic-ref --short -q HEAD 2>/dev/null)" || branch=""
   case "$pattern" in
-    *'{id}'*)
-      prefix="${pattern%%'{id}'*}"
-      suffix="${pattern#*'{id}'}"
-      case "$suffix" in
-        *'{id}'*) branch="" ;;
-      esac
-      if [ -n "$branch" ]; then
-        case "$branch" in
-          "$prefix"*"$suffix")
-            id="${branch#"$prefix"}"
-            id="${id%"$suffix"}"
-            if _rx_valid_id "$id"; then
-              printf '%s\n' "$id"
-              return 0
-            fi
-            ;;
-        esac
-      fi
-      ;;
+    *'{id}'*) ;;
+    *) return 1 ;;
   esac
+  prefix="${pattern%%'{id}'*}"
+  suffix="${pattern#*'{id}'}"
+  case "$suffix" in
+    *'{id}'*) return 1 ;;
+  esac
+  case "$branch" in
+    "$prefix"*"$suffix") ;;
+    *) return 1 ;;
+  esac
+  id="${branch#"$prefix"}"
+  id="${id%"$suffix"}"
+  _rx_valid_id "$id" || return 1
+  printf '%s\n' "$id"
+  return 0
+}
+
+# rx_feature_id: print the active feature id and return 0, else print nothing
+# and return 1. Order: (a) current branch via rx_branch_id, (b) first line of
+# <root>/.rx/local/active. Ids must be valid per _rx_valid_id. Detached HEAD,
+# rebase and non-git all fall through to (b).
+rx_feature_id() {
+  local branch id root line
+  branch="$(git symbolic-ref --short -q HEAD 2>/dev/null)" || branch=""
+  if [ -n "$branch" ]; then
+    rx_branch_id "$branch" && return 0
+  fi
   root="$(rx_root)"
   if [ -f "$root/.rx/local/active" ]; then
     line=""

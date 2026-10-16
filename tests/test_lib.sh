@@ -294,6 +294,36 @@ printf 'ng-feat\n' > "$NG/p/.rx/local/active"
 GIT_CEILING_DIRECTORIES="$NG" run "$NG/p" rx_feature_id
 assert_eq "ng-feat" "$OUT" "non-git resolves from active file"
 
+# ---------- rx_branch_id ----------
+BI="$(new_repo)"
+bid_case() { # <message> <branch> <config-content> <expected> <expected-rc>
+  writecfg "$BI" "$3"
+  run "$BI" rx_branch_id "$2"
+  assert_eq "$4" "$OUT" "branch_id $1: output"
+  assert_eq "$5" "$RC" "branch_id $1: rc"
+  assert_eq "" "$ERR" "branch_id $1: quiet"
+}
+bid_case "default pattern"      "feature/abc.1_x-2" 'test_cmd: true\n' "abc.1_x-2" 0
+bid_case "explicit pattern"     "feature/abc"       'branch_pattern: feature/{id}\n' "abc" 0
+bid_case "wrong prefix"         "release/1"         'branch_pattern: feature/{id}\n' "" 1
+bid_case "custom prefix+suffix" "wip/abc-x"         'branch_pattern: wip/{id}-x\n' "abc" 0
+bid_case "suffix mismatch"      "wip/abc-y"         'branch_pattern: wip/{id}-x\n' "" 1
+bid_case "{id} alone"           "2026-q4-sso"       'branch_pattern: {id}\n' "2026-q4-sso" 0
+bid_case "no placeholder"       "feature/abc"       'branch_pattern: feature/abc\n' "" 1
+bid_case "two placeholders"     "a/x/b/x"           'branch_pattern: a/{id}/b/{id}\n' "" 1
+bid_case "slash in id"          "feature/foo/bar"   'branch_pattern: feature/{id}\n' "" 1
+bid_case "id must start alnum"  "feature/_hidden"   'branch_pattern: feature/{id}\n' "" 1
+bid_case "empty id"             "wip/-x"            'branch_pattern: wip/{id}-x\n' "" 1
+bid_case "empty branch"         ""                  'branch_pattern: feature/{id}\n' "" 1
+bid_case "pattern not a regex"  "featureXabc"       'branch_pattern: feature.{id}\n' "" 1
+bid_case "regex chars literal"  "a+b/zed"           'branch_pattern: a+b/{id}\n' "zed" 0
+bid_case "bare prefix"          "feature/"          'branch_pattern: feature/{id}\n' "" 1
+rm -f "$BI/.rx/config.yml"
+run "$BI" rx_branch_id feature/nocfg
+assert_eq "nocfg" "$OUT" "branch_id works without config (default pattern)"
+clobb="$(inrepo_eval "$BI" 'branch=B pattern=P prefix=X suffix=S id=I; rx_branch_id feature/q >/dev/null; echo "$branch$pattern$prefix$suffix$id"' 2>&1)"
+assert_eq "BPXSI" "$clobb" "branch_id does not clobber caller variables"
+
 # ---------- rx_state_get ----------
 S="$(new_repo)"
 mkdir -p "$S/specs/f1" "$S/specs/f2" "$S/specs/f3"
