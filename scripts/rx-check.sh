@@ -439,10 +439,11 @@ _chk_shared() {
   vf="${vf#./}"
   SH_VF="$(printf '%s' "$vf" | tr 'A-Z' 'a-z')"
 
-  # change set: NUL-delimited <status> <path> records. The NET change since the merge
-  # base (merge-base tree vs the working tree: committed + staged + unstaged), plus
-  # untracked non-ignored files as additions. A violation that was reverted or fixed
-  # (committed or staged) is net-zero and passes.
+  # change set: NUL-delimited <status> <path> records, the union of the NET change since
+  # the merge base seen from (i) the index (what a commit would record), (ii) the working
+  # tree, and (iii) untracked non-ignored files as additions. A violation that was
+  # reverted in both the index and the working tree is net-zero and passes; one that is
+  # staged but then fixed or removed on disk is still reported.
   # SH_TMP is global: the EXIT trap runs after this function has returned.
   SH_TMP="$(mktemp -d "${TMPDIR:-/tmp}/rx-shared.XXXXXX")" || {
     printf 'rx-check: cannot create a temp dir\n' >&2
@@ -455,7 +456,12 @@ _chk_shared() {
     exit 2
   fi
   if ! git -C "$SH_ROOT" diff -z --name-status --no-renames --ignore-submodules=none \
-    "$mb" -- > "$tmp/all" 2>"$tmp/err"; then
+    --cached "$mb" -- > "$tmp/all" 2>"$tmp/err"; then
+    printf "rx-check: cannot diff against base branch '%s': %s\n" "$base" "$(cat "$tmp/err")" >&2
+    exit 2
+  fi
+  if ! git -C "$SH_ROOT" diff -z --name-status --no-renames --ignore-submodules=none \
+    "$mb" -- >> "$tmp/all" 2>"$tmp/err"; then
     printf "rx-check: cannot diff against base branch '%s': %s\n" "$base" "$(cat "$tmp/err")" >&2
     exit 2
   fi

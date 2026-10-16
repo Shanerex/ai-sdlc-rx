@@ -62,8 +62,6 @@ idx_commit() {
   h="$(printf 'x\n' | git -C "$1" hash-object -w --stdin)"
   git -C "$1" update-index --add --cacheinfo "100644,$h,$2"
   git -C "$1" commit -q -m c
-  # not on disk: skip-worktree makes git diff use the index entry instead of the missing file
-  git -C "$1" update-index --skip-worktree "$2"
 }
 
 # pass_case <label>: the last run was clean.
@@ -388,7 +386,7 @@ run_check "$R" shared
 pass_case "violation committed, reverted (staged) before the corrective commit"
 git -C "$R" reset -q
 run_check "$R" shared
-pass_case "violation committed, reverted (unstaged)"
+fail_case "violation committed, reverted in the working tree only (index still has it)" "CLAUDE.md: $SHARED"
 R="$(fresh)"; feat "$R"
 append "$R" CLAUDE.md; append "$R" src/a.java; ci "$R"
 git -C "$R" checkout -q main -- CLAUDE.md
@@ -397,6 +395,41 @@ pass_case "violation reverted, other code changes remain"
 append "$R" docs/knowledge/architecture.md
 run_check "$R" shared
 fail_case "...and a new violation is still found" "docs/knowledge/architecture.md: $SHARED"
+
+# the INDEX is what a commit records: a staged violation counts even if the file is then fixed on disk
+R="$(fresh)"; feat "$R"
+append "$R" CLAUDE.md; git -C "$R" add CLAUDE.md
+git -C "$R" show main:CLAUDE.md > "$R/CLAUDE.md"
+run_check "$R" shared
+fail_case "staged CLAUDE.md edit, working copy back to base content" "CLAUDE.md: $SHARED"
+R="$(fresh)"; feat "$R"
+append "$R" docs/knowledge/decisions/d1.md; git -C "$R" add -A
+rm "$R/docs/knowledge/decisions/d1.md"
+run_check "$R" shared
+fail_case "staged decision edit, then deleted on disk" "docs/knowledge/decisions/d1.md: $KNOW"
+R="$(fresh)"
+git -C "$R" rm -q docs/knowledge/architecture.md; git -C "$R" commit -q -m drop
+feat "$R"
+newfile "$R" docs/knowledge/architecture.md; git -C "$R" add -A
+rm "$R/docs/knowledge/architecture.md"
+run_check "$R" shared
+fail_case "staged new architecture.md, then deleted from disk" "docs/knowledge/architecture.md: $SHARED"
+R="$(fresh)"; feat "$R"
+newfile "$R" specs/y/plan.md; git -C "$R" add -A
+rm "$R/specs/y/plan.md"
+run_check "$R" shared
+fail_case "staged file in another feature's specs, then deleted from disk" "specs/y/plan.md: $OTHER"
+# net-zero in index AND working tree still passes
+R="$(fresh)"; feat "$R"
+append "$R" CLAUDE.md; ci "$R"
+git -C "$R" checkout -q main -- CLAUDE.md
+run_check "$R" shared
+pass_case "committed violation, reverted in index and working tree"
+# an allowed staged file that is gone from disk is fine
+R="$(fresh)"; feat "$R"
+newfile "$R" src/b.java; git -C "$R" add -A; rm "$R/src/b.java"
+run_check "$R" shared
+pass_case "staged code file removed from disk"
 
 # a new decision committed (A) and edited again (M) is still new against the merge base
 R="$(fresh)"; feat "$R"
