@@ -391,6 +391,43 @@ rx_glob_match_key() {
   return 1
 }
 
+# rx_glob_filter <config-key>...: batch form of rx_glob_match_key for long file lists (a
+# per-file call re-reads the config and forks, about 25 ms a file). Reads NUL-separated
+# repo-relative paths on stdin and prints, one per line and in input order, those that match
+# an entry of ANY named key and are existing regular files (relative to the cwd). The globs
+# are translated once. A path containing a newline is skipped.
+rx_glob_filter() {
+  local key globs rest entry res="" re path
+  local -a res_list=()
+  for key in "$@"; do
+    globs="$(rx_cfg "$key")"
+    rest="$globs"
+    while [ -n "$rest" ]; do
+      case "$rest" in
+        *,*) entry="${rest%%,*}"; rest="${rest#*,}" ;;
+        *) entry="$rest"; rest="" ;;
+      esac
+      entry="$(_rx_trim "$entry")"
+      entry="${entry#./}"
+      [ -n "$entry" ] || continue
+      res_list[${#res_list[@]}]="$(_rx_glob_re "$entry")"
+    done
+  done
+  [ "${#res_list[@]}" -gt 0 ] || { cat >/dev/null; return 0; }
+  while IFS= read -r -d '' path; do
+    path="${path#./}"
+    case "$path" in *$'\n'*) continue ;; esac
+    [ -f "$path" ] || continue
+    for re in "${res_list[@]}"; do
+      if [[ $path =~ $re ]]; then
+        printf '%s\n' "$path"
+        break
+      fi
+    done
+  done
+  return 0
+}
+
 # rx_locale_c / rx_locale_user: the rx checks are byte-oriented (under a UTF-8 locale BSD
 # tr/sed abort at the first invalid byte and bash =~ fails on it), so a script calls
 # rx_locale_c once after sourcing this file. Commands that belong to the user (test_cmd,

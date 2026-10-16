@@ -6,6 +6,7 @@ ROOT="$(cd "$HERE/.." && pwd)"
 . "$HERE/lib/fixture.sh"
 . "$ROOT/scripts/rx-lib.sh"
 
+NL=$'\n'
 D="$(cd "$(fixture_tmpdir)" && pwd -P)"
 fixture_repo "$D/r"
 cd "$D/r" || exit 1
@@ -49,4 +50,14 @@ rm "$D/r/.rx/config.yml"
 rc=0
 rx_glob_match src/a.java || rc=$?
 assert_eq "1" "$rc" "no config: nothing matches"
+# rx_glob_filter <key>...: NUL-separated paths on stdin, matching existing regular files out, one per line
+fixture_config "$D/r" "source_globs=src/**" "test_globs=tests/*.sh, docs/a b.md"
+mkdir -p "$D/r/src/deep" "$D/r/tests" "$D/r/docs"
+: > "$D/r/src/A.java"; : > "$D/r/src/deep/B.java"; : > "$D/r/tests/t.sh"; : > "$D/r/tests/sub.txt"; : > "$D/r/docs/a b.md"; : > "$D/r/README.md"
+got="$(printf 'src/A.java\0src/deep/B.java\0src/gone.java\0tests/t.sh\0tests/sub.txt\0docs/a b.md\0README.md\0src/deep\0' | rx_glob_filter source_globs test_globs)"
+assert_eq "src/A.java${NL}src/deep/B.java${NL}tests/t.sh${NL}docs/a b.md" "$got" "rx_glob_filter: matches either key, drops missing files and directories, keeps order"
+got="$(printf 'src/A.java\0' | rx_glob_filter test_globs)"
+assert_eq "" "$got" "rx_glob_filter: only the named keys count"
+got="$(printf 'src/A.java\0' | rx_glob_filter nokey)"
+assert_eq "" "$got" "rx_glob_filter: unset key matches nothing"
 echo "test_glob: ok"

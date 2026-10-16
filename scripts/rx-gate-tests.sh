@@ -56,17 +56,16 @@ ROOT="$(rx_root)"
 HASHFILE="$ROOT/.rx/local/test-hash"
 HASH=""
 if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-  # Sorted file list (NUL-safe), content ids from git, plus the command and globs.
+  # Matching files (one rx_glob_filter pass, sorted), their git content ids in one
+  # `git hash-object` call, plus the command and globs.
   HASH="$(
     cd "$ROOT" || exit 0
+    LIST="$(git ls-files -z --cached --others --exclude-standard | LC_ALL=C sort -z | rx_glob_filter source_globs test_globs)"
     {
       printf 'cmd=%s\nsrc=%s\ntest=%s\n' "$CMD" "$(rx_cfg source_globs)" "$(rx_cfg test_globs)"
-      git ls-files -z --cached --others --exclude-standard | LC_ALL=C sort -z | while IFS= read -r -d '' f; do
-        [ -f "$f" ] || continue
-        if rx_glob_match "$f" || rx_glob_match_key test_globs "$f"; then
-          printf '%s %s\n' "$(git hash-object -- "$f")" "$f"
-        fi
-      done
+      if [ -n "$LIST" ]; then
+        printf '%s\n' "$LIST" | git hash-object --stdin-paths | paste -d' ' - <(printf '%s\n' "$LIST")
+      fi
     } | shasum -a 256 | cut -d' ' -f1
   )"
   if [ -n "$HASH" ] && [ -f "$HASHFILE" ]; then

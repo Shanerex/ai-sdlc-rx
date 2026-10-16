@@ -538,6 +538,16 @@ Phase 1 (T1–T8) is built and reviewed on branch `build/rx-phase-1`. These item
 - **T2/T11/T26:** `marketplace.json` `owner.name` is a placeholder (`rx`); `plugin.json` has no `author`; the `claude --plugin-dir .` load check is still unverified (`claude plugin validate .` passes).
 - **Design plan drift (`docs/plans/2026-10-16-rx-toolkit-plan.md`, not edited):** line 87 says "tags in frontmatter" but the contract is a bare `tags: [a, b]` first line; line 133 says `base_branch...HEAD` but `shared` compares the merge base against the index, working tree and untracked files. Amend the plan when convenient.
 
+## Carry-over from Phase 2 (read before starting Phase 3)
+
+Phase 2 (T9-T16, plus the T8 follow-up) is built on branch `build/rx-phase-1`, tag `phase-2`.
+
+- **T17 (init), pre-commit and the guard:** `rx-guard.sh` is a PreToolUse hook. It reads the hook JSON on stdin and exits 0 when there is none, so calling it from git pre-commit as the T17 text says would check nothing. The pre-commit "plan first" check needs its own mode (for example `rx-guard.sh --staged`: any staged path matching `source_globs` while `g2` is not approved blocks the commit) with a test, or a separate small script. `rx-gate-tests.sh` works from pre-commit as is (no stdin = not `stop_hook_active`), but it acts only in phase `build`.
+- **T17:** the guard blocks Edit/Write on `.rx/config.yml` and `.rx/scripts/**`. `/rx:init` must write them through Bash scripts, not Edit/Write. `--refresh-scripts` must copy `rx-guard.sh`, `rx-gate-tests.sh`, `rx-new-feature.sh` and the templates too (`rx-new-feature.sh` looks in `<script-dir>/templates`).
+- **T19 (dogfood), unverified assumptions:** plugin agents are addressed as `rx:pm`, `rx:architect`, `rx:dev`, `rx:qa`, `rx:security` in `commands/next.md`; SendMessage resume of a finished two-pass agent; the main thread has no `agent_id` while subagents do (the guard relies on this to keep g1-g3 orchestrator-only); `claude --plugin-dir .` Stop hook timeout of 660 s.
+- **Config keys added:** `test_timeout` (seconds, default 600; the Stop/SubagentStop hook timeout in `hooks/hooks.json` is 660, so raise both together) and optional `test_globs` (same list format as `source_globs`). Document both in the README (T26).
+- **Deferred minors:** the guard resolves symlinked directories but not a symlinked final file (a symlink inside the repo pointing at `architecture.md`); `rx-gate-tests.sh` skips file names containing a newline; `security_review: plan+verify` is accepted but only `verify` is implemented; duplicate lines for one cause when `state.md` is missing in `rx-check.sh done` (carried from Phase 1).
+
 ## Self-review
 
 - **Spec coverage:** bundle table → T3, T9–T17. Layout → T1–T3, T11, T26 (Codex files deferred with T24). Per-project footprint → T14, T17. Token rules → T3, T12–T13 and measured in T21. Merge-safety → T7, T22. Workflow and gates → T15. Two-pass → T12, T15. Codex → T23–T25 (deferred). Verification list → T19, T22, T27 (Codex and coverage lines skipped).

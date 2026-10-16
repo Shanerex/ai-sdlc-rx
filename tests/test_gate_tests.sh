@@ -153,6 +153,15 @@ R="$(new_repo)"; CNT="${R%/r}/count"; mkdir "$R/sub"
 OUT="$(cd "$R/sub" && "$GATE" <<<"{\"cwd\": \"$R/sub\"}" 2>/dev/null)"; RC=$?
 assert_eq "0" "$RC" "subdirectory: rc 0"; assert_eq "1" "$(runs)" "subdirectory: ran once from the repo root"
 
+# ---------- many files: the skip path stays fast ----------
+R="$(new_repo)"; CNT="${R%/r}/count"
+mkdir -p "$R/src/gen" "$R/docs"
+i=0; while [ "$i" -lt 600 ]; do echo "$i" > "$R/src/gen/f$i.java"; echo "$i" > "$R/docs/d$i.md"; i=$((i + 1)); done
+git -C "$R" add -A; git -C "$R" commit -q -m many
+run_gate "$R"; run_gate "$R"
+assert_eq "1" "$(runs)" "many files: second run skipped"
+[ "$ELAPSED" -le 8 ] || _rx_fail "many files: skip path took ${ELAPSED}s for 1200 files (limit 8s)"
+
 # ---------- no git: no caching, still runs ----------
 D="$(cd "$(fixture_tmpdir)" && pwd -P)"; CNT="$D/count"
 mkdir -p "$D/n/src" "$D/n/specs/x" "$D/n/.rx/local"
