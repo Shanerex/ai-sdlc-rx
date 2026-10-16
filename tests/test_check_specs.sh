@@ -403,11 +403,31 @@ assert_eq "specs/x/tasks.md: malformed task line '- [ ] T-2 (AC-1) this descript
 { cat "$TPL/tasks.md"; printf -- '- [ ] T-2 (AC-1) nope\r\n'; } > "$T"
 run_check "$R" specs x
 assert_eq "specs/x/tasks.md: malformed task line '- [ ] T-2 (AC-1) nope'" "$OUT" "malformed line CR stripped"
-# lines with a checkbox but no T- id, and prose mentioning an id, are not task lines
-{ cat "$TPL/tasks.md"; printf -- '- [ ] not a task\n- [x] done thing\nT-9 (AC-9): plain\nsee T-3 for details\n- see T-4 (AC-9)\n'; } > "$T"
+# prose mentioning an id, and bullets without a checkbox, are not task lines
+{ cat "$TPL/tasks.md"; printf -- 'T-9 (AC-9): plain\nsee T-3 for details\n- see T-4 (AC-9)\n- plain bullet\n'; } > "$T"
 run_check "$R" specs x
 assert_eq "" "$OUT" "non-task lines ignored"
 assert_eq "0" "$RC" "non-task lines ignored: rc 0"
+# any checkbox line without a T- id is malformed too (it could hide unfinished work)
+{ cat "$TPL/tasks.md"; printf -- '- [ ] fix the remaining failing tests\n- [x] done thing\n'; } > "$T"
+run_check "$R" specs x
+assert_eq "specs/x/tasks.md: malformed task line '- [ ] fix the remaining failing tests'
+specs/x/tasks.md: malformed task line '- [x] done thing'" "$OUT" "checkbox lines without a T- id are malformed"
+assert_eq "1" "$RC" "checkbox lines without a T- id: rc 1"
+{ cat "$TPL/tasks.md"; printf -- '1. [ ] T-2 (AC-1): hidden\n'; } > "$T"
+run_check "$R" specs x
+assert_eq "specs/x/tasks.md: malformed task line '1. [ ] T-2 (AC-1): hidden'" "$OUT" "numbered checkbox line is malformed"
+for bad in '2) [ ] later' '10. [x] T-3 (AC-1): ten' '   * [ ]' '+ [link](http://x)'; do
+  { cat "$TPL/tasks.md"; printf '%s\n' "$bad"; } > "$T"
+  run_check "$R" specs x
+  assert_eq "specs/x/tasks.md: malformed task line '$bad'" "$OUT" "checkbox trigger: $bad"
+done
+R9="$(new_repo)"
+mkquick "$R9" q
+printf -- '- [ ] loose item\n' >> "$R9/specs/q/quick.md"
+run_check "$R9" specs q
+assert_eq "specs/q/quick.md: malformed task line '- [ ] loose item'" "$OUT" "loose checkbox in quick.md"
+cp "$TPL/tasks.md" "$T"
 # near-miss task lines are caught by the trigger and fail the strict format
 TAB="$(printf '\t')"
 i=0
@@ -705,6 +725,19 @@ assert_eq "0" "$RC" "Latin-1 task description: rc 0"
 { cat "$TPL/tasks.md"; printf -- '- [ ] T-2 (AC-1): caf\303\251\n'; } > "$T"
 LC_ALL="$UTF" LANG="$UTF" run_check "$R" specs x
 assert_eq "" "$OUT$ERR" "valid UTF-8 in task description"
+
+# ---------- CDPATH ----------
+# a relative invocation (no ./ prefix) must not be redirected by an exported CDPATH
+R="$(new_repo)"
+mkdir -p "$R/scripts" "$R/skills"
+cp "$ROOT"/scripts/*.sh "$R/scripts/"
+cp -R "$ROOT/skills/rx-spec" "$R/skills/"
+DECOY="$(fixture_tmpdir)"
+mkdir -p "$DECOY/scripts"
+OUT="$(cd "$R" && CDPATH="$DECOY:." bash scripts/rx-check.sh specs 2>&1)"
+RC=$?
+assert_eq "" "$OUT" "CDPATH decoy: quiet"
+assert_eq "0" "$RC" "CDPATH decoy: rc 0"
 
 # ---------- missing lib ----------
 R="$(new_repo)"

@@ -202,6 +202,7 @@ git -C "$F" branch -q -D feature/2026-10-16-login
 
 fid_case "feature/{id} pattern"  "feature/abc.1_x-2" 'branch_pattern: feature/{id}\n' "abc.1_x-2" 0
 fid_case "wrong prefix"          "hotfix/abc"        'branch_pattern: feature/{id}\n' "" 1
+fid_case "{id} pattern: base branch is no feature" "-" 'branch_pattern: {id}\nbase_branch: main\n' "" 1
 fid_case "custom pattern"        "wip/abc-x"         'branch_pattern: wip/{id}-x\n' "abc" 0
 fid_case "custom suffix mismatch" "wip/abc-y"        'branch_pattern: wip/{id}-x\n' "" 1
 fid_case "quoted pattern"        "wip/abc"           'branch_pattern: "wip/{id}"   # c\n' "abc" 0
@@ -215,6 +216,14 @@ fid_case "empty id rejected"     "wip/-x"            'branch_pattern: wip/{id}-x
 fid_case "pattern is not a regex" "featureXabc"      'branch_pattern: feature.{id}\n' "" 1
 fid_case "regex chars in pattern literal" "a+b/zed" 'branch_pattern: a+b/{id}\n' "zed" 0
 fid_case "branch main, no active" "-"                'branch_pattern: feature/{id}\n' "" 1
+# with `{id}` alone the base branch is not a feature: fall through to .rx/local/active
+writecfg "$F" 'branch_pattern: {id}\nbase_branch: main\n'
+mkdir -p "$F/.rx/local"
+printf 'from-active\n' > "$F/.rx/local/active"
+run "$F" rx_feature_id
+assert_eq "from-active" "$OUT" "feature_id: base branch falls through to .rx/local/active"
+assert_eq "0" "$RC" "feature_id: base branch falls through, rc 0"
+rm -rf "$F/.rx/local"
 fid_case "no config at all, main" "-"                '' "" 1
 
 # (b) .rx/local/active fallback
@@ -304,6 +313,11 @@ bid_case() { # <message> <branch> <config-content> <expected> <expected-rc>
   assert_eq "" "$ERR" "branch_id $1: quiet"
 }
 bid_case "default pattern"      "feature/abc.1_x-2" 'test_cmd: true\n' "abc.1_x-2" 0
+bid_case "base branch is never an id"  "main"  'branch_pattern: {id}\nbase_branch: main\n' "" 1
+bid_case "custom base branch is never an id" "trunk" 'branch_pattern: {id}\nbase_branch: trunk\n' "" 1
+bid_case "other branch with {id} alone" "work-1" 'branch_pattern: {id}\nbase_branch: main\n' "work-1" 0
+bid_case "base_branch unset, {id} alone" "main" 'branch_pattern: {id}\n' "main" 0
+bid_case "prefixed branch named like base" "feature/main" 'branch_pattern: feature/{id}\nbase_branch: main\n' "main" 0
 bid_case "explicit pattern"     "feature/abc"       'branch_pattern: feature/{id}\n' "abc" 0
 bid_case "wrong prefix"         "release/1"         'branch_pattern: feature/{id}\n' "" 1
 bid_case "custom prefix+suffix" "wip/abc-x"         'branch_pattern: wip/{id}-x\n' "abc" 0
@@ -524,6 +538,8 @@ assert_eq "2" "$?" "rx_run_timeout: empty outfile is a usage error"
 state_probe='
   trap "echo caller-int" INT
   trap "echo caller-term" TERM
+  trap "echo caller-hup" HUP
+  trap "echo caller-quit" QUIT
   pid=P wpid=W rc=R secs=S out=O cmd=C had_m=H flag=F old_int=I old_term=T
   b_o="$(set +o)"; b_t="$(trap -p)"; b_m="${-//[^m]/}"
   rx_run_timeout 1 "'"$RTO"'" "sleep 30" ; r1=$?
@@ -541,19 +557,23 @@ assert_eq "opts-same${NLX}traps-same${NLX}monitor-same${NLX}124 3 PWRSOCHFIT" "$
 got="$(bash -c ". '$LIB'; set -eu; rx_run_timeout 5 '$RTO' 'exit 4' || echo \"rc=\$?\"; rx_run_timeout 1 '$RTO' 'sleep 30' || echo \"rc=\$?\"" 2>&1)"
 assert_eq "rc=4${NLX}rc=124" "$got" "rx_run_timeout under set -eu returns the status (callers guard it)"
 
-# a TERM to the caller kills the command's group too, and the caller dies of the signal
-rm -f "$RT/pidt"
-bash -c ". '$LIB'; rx_run_timeout 30 '$RTO' 'sleep 35 & echo \$! > $RT/pidt; wait'; echo survived > '$RT/survived'" </dev/null >/dev/null 2>&1 &
-tp=$!
-n=0
-while [ ! -s "$RT/pidt" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
-kill -TERM "$tp"
-wait "$tp" 2>/dev/null
-sleep 0.3
-kill -0 "$(cat "$RT/pidt" 2>/dev/null || echo 999999)" 2>/dev/null \
-  && _rx_fail "rx_run_timeout: command survived a TERM to its caller"
-[ -e "$RT/survived" ] && _rx_fail "rx_run_timeout: caller kept running after TERM"
-assert_eq "" "$(ps ax -o command | grep -E 'sleep (30|35)$' | grep -v grep)" "rx_run_timeout: nothing left after a TERM to the caller"
+# a TERM or HUP to the caller kills the command's group too, and the caller dies of the signal
+# (INT and QUIT are handled the same way, but background jobs of a non-interactive shell ignore
+# them from the start, so they cannot be exercised from here)
+for sig in TERM HUP; do
+  rm -f "$RT/pidt" "$RT/survived"
+  bash -c ". '$LIB'; rx_run_timeout 30 '$RTO' 'sleep 35 & echo \$! > $RT/pidt; wait'; echo survived > '$RT/survived'" </dev/null >/dev/null 2>&1 &
+  tp=$!
+  n=0
+  while [ ! -s "$RT/pidt" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  kill -s "$sig" "$tp"
+  wait "$tp" 2>/dev/null
+  sleep 0.3
+  kill -0 "$(cat "$RT/pidt" 2>/dev/null || echo 999999)" 2>/dev/null \
+    && _rx_fail "rx_run_timeout: command survived a $sig to its caller"
+  [ -e "$RT/survived" ] && _rx_fail "rx_run_timeout: caller kept running after $sig"
+  assert_eq "" "$(ps ax -o command | grep -E 'sleep (30|35)$' | grep -v grep)" "rx_run_timeout: nothing left after a $sig to the caller"
+done
 
 # ---------- source hygiene ----------
 H="$(new_repo)"

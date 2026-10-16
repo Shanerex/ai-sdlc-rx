@@ -8,8 +8,10 @@ pass=0
 fail=0
 failed_files=""
 
+total=0
 for f in "$dir"/test_*.sh; do
   [ -e "$f" ] || continue
+  total=$((total + 1))
   name="$(basename "$f")"
   if bash "$f"; then
     echo "PASS $name"
@@ -21,6 +23,10 @@ for f in "$dir"/test_*.sh; do
   fi
 done
 
+if [ "$total" -eq 0 ]; then
+  echo "run.sh: no test files found in $dir" >&2
+  exit 1
+fi
 echo "----"
 echo "$pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then

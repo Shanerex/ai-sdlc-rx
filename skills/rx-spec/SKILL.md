@@ -30,10 +30,10 @@ Specs live in `specs/<feature-id>/`. `review.qa.md` and `review.security.md` are
 
 - Every spec file opens with `---` frontmatter, flat `key: value`, no nesting. Frontmatter counts toward the cap.
 - Non-state specs have one key: `status: draft|final`.
-- Each template `## ` heading is required; add none, drop none.
+- The template's `## ` headings are the required `## ` headings: they must be present (extra sections are fine).
 - IDs are local to the feature, unique within it, never global counters. Other files cite by ID, never restate.
 - `- R-n: text` requirement (requirements.md). `- AC-n: text` acceptance criterion (requirements.md, quick.md).
-- Task line, exactly: `- [ ] T-n (AC-n, AC-n): description`. Ticked is `- [x]`. Each T cites at least one existing AC.
+- Task line, exactly: `- [ ] T-n (AC-n, AC-n): description`. Ticked is `- [x]`. Each T cites at least one existing AC. In tasks.md and quick.md every checkbox line (also `* [ ]`, `1. [ ]`) must be a task line.
 
 ## state.md
 
@@ -50,8 +50,13 @@ Body is `## Log`, one line per event. Whoever appends near the 30-line cap must 
 State protocol:
 - state.md is the single source of truth for phase and gates.
 - Only the orchestrator writes `g1`-`g3`, and only after an explicit human yes.
-- dev updates `status` and `next` and ticks tasks.
-- Any phase resumes from state.md after /clear.
+- dev updates `status` and `next` and ticks tasks. Any phase resumes from state.md after /clear.
+
+## Lanes (enforced by `rx-check.sh done`)
+
+- Full lane: `state.md`, `requirements.md`, `plan.md`, `tasks.md`, `review.md` all required; `g1`, `g2`, `g3` approved.
+- Quick lane (`quick.md` exists): `state.md` + `quick.md` required, `review.md` optional. The only gate is `g2` (pre-build authorization); there is no `g3`. Lanes never mix: `quick.md` excludes `requirements.md`, `plan.md`, `tasks.md`.
+- At done every spec file except `state.md` is `status: final` and no `review.qa.md`/`review.security.md` is left. Finalized by: pm (pass 2) `requirements.md`; architect (pass 2) `plan.md`, `tasks.md`; orchestrator `review.md` (when merging qa/security) and `quick.md` (once its gate is approved).
 
 ## Two-pass (pm, architect)
 
@@ -71,7 +76,5 @@ State protocol:
 
 ## Token rules
 
-- Read only the paths in your spawn prompt.
-- Refer by ID; never restate another file.
-- Final message to the caller is at most 15 lines; detail goes in files.
-- Load a template only when writing that file.
+- Read only the paths in your spawn prompt. Refer by ID; never restate another file.
+- Final message to the caller is at most 15 lines; detail goes in files. Load a template only when writing that file.

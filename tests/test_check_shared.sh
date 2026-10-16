@@ -29,8 +29,8 @@ printf 'claude\n' > "$TEMPLATE/CLAUDE.md"
 printf 'agents\n' > "$TEMPLATE/AGENTS.md"
 printf '<v>1</v>\n' > "$TEMPLATE/pom.xml"
 printf 'arch\n' > "$TEMPLATE/docs/knowledge/architecture.md"
-printf 'd1\n' > "$TEMPLATE/docs/knowledge/decisions/d1.md"
-printf 'l1\n' > "$TEMPLATE/docs/knowledge/learnings/l1.md"
+printf 'tags: [t]\nd1\n' > "$TEMPLATE/docs/knowledge/decisions/d1.md"
+printf 'tags: [t]\nl1\n' > "$TEMPLATE/docs/knowledge/learnings/l1.md"
 printf 'sx\n' > "$TEMPLATE/specs/x/state.md"
 printf 'sy\n' > "$TEMPLATE/specs/y/state.md"
 printf 'class A {}\n' > "$TEMPLATE/src/a.java"
@@ -55,7 +55,14 @@ ci() { git -C "$1" add -A && git -C "$1" commit -q -m c; }
 # append <repo> <path>: modify a tracked file.
 append() { printf 'more\n' >> "$1/$2"; }
 # newfile <repo> <path>: create a file (and its directory).
-newfile() { mkdir -p "$(dirname "$1/$2")" && printf 'new\n' > "$1/$2"; }
+# New decision/learning entries get valid content (a tags line); other files a plain line.
+newfile() {
+  mkdir -p "$(dirname "$1/$2")"
+  case "$2" in
+    docs/knowledge/decisions/*|docs/knowledge/learnings/*) printf 'tags: [t]\nnew\n' > "$1/$2" ;;
+    *) printf 'new\n' > "$1/$2" ;;
+  esac
+}
 # idx_commit <repo> <path>: commit a file straight into the index (it never exists on disk).
 idx_commit() {
   local h
@@ -671,5 +678,140 @@ rm -f "$R/.rx/config.yml"
 run_check "$R" shared
 assert_eq "" "$OUT$ERR" "no config: silent"
 assert_eq "0" "$RC" "no config: rc 0"
+
+# ---------- version_bump ----------
+# vb_repo <value...>: base branch config with the given version_bump line(s), then feature/x.
+vb_repo() {
+  R="$(fresh)"
+  fixture_config "$R" "$@"
+  git -C "$R" commit -q --allow-empty -am "version_bump config"
+  feat "$R"
+}
+vb_repo version_bump=release
+append "$R" pom.xml
+run_check "$R" shared
+fail_case "version_bump release: version file is shared" "pom.xml: $SHARED"
+R="$(fresh)"
+sed -e '/^version_bump:/d' "$R/.rx/config.yml" > "$R/.rx/c.new" && mv "$R/.rx/c.new" "$R/.rx/config.yml"
+git -C "$R" commit -q -am "no version_bump"
+feat "$R"; append "$R" pom.xml
+run_check "$R" shared
+fail_case "version_bump unset means release" "pom.xml: $SHARED"
+vb_repo version_bump=
+append "$R" pom.xml
+run_check "$R" shared
+fail_case "version_bump empty means release" "pom.xml: $SHARED"
+vb_repo version_bump=feature
+append "$R" pom.xml
+run_check "$R" shared
+pass_case "version_bump feature: version file may change"
+append "$R" CLAUDE.md
+run_check "$R" shared
+fail_case "version_bump feature: other shared files still protected" "CLAUDE.md: $SHARED"
+for v in major Feature RELEASE yes; do
+  vb_repo "version_bump=$v"
+  run_check "$R" shared
+  err_case "version_bump '$v'" "rx-check: invalid version_bump '$v' (release|feature)"
+done
+
+# ---------- new knowledge entries: content ----------
+# kn <path> <printf-format> [args]: write a new entry on feature/x (committed) and run shared.
+kn() {
+  local path="$1"
+  shift
+  R="$(fresh)"; feat "$R"
+  mkdir -p "$(dirname "$R/$path")"
+  printf -- "$@" > "$R/$path"
+  ci "$R"
+  run_check "$R" shared
+}
+D=docs/knowledge/decisions
+L=docs/knowledge/learnings
+kn $D/n.md 'tags: [a, b]\n2\n3\n4\n5\n6\n'
+pass_case "decision of 6 lines"
+kn $L/n.md 'tags: [a]\n2\n3\n4\n5\n'
+pass_case "learning of 5 lines"
+kn $D/n.md 'tags: []\n'
+pass_case "decision, empty tags list, one line"
+kn $D/n.md 'tags: [a]\r\n2\r\n3\r\n4\r\n5\r\n6\r\n'
+pass_case "decision of 6 CRLF lines"
+kn $D/n.md 'tags: [a]\n2\n3\n4\n5\n6'
+pass_case "decision of 6 lines, no final newline"
+kn $D/n.md 'tags: [a]\n2\n3\n4\n5\n6\n7\n'
+fail_case "decision of 7 lines" "$D/n.md: decision exceeds 6 lines (7)"
+kn $D/n.md 'tags: [a]\n2\n3\n4\n5\n6\n7'
+fail_case "decision of 7 lines, no final newline" "$D/n.md: decision exceeds 6 lines (7)"
+kn $L/n.md 'tags: [a]\n2\n3\n4\n5\n6\n'
+fail_case "learning of 6 lines" "$L/n.md: learning exceeds 5 lines (6)"
+kn $L/n.md 'tags: [a]\r\n2\r\n3\r\n4\r\n5\r\n6\r\n'
+fail_case "learning of 6 CRLF lines" "$L/n.md: learning exceeds 5 lines (6)"
+for bad in 'no tags here\nbody\n' 'tags: [a\nbody\n' 'tags: [a] x\nbody\n' 'Tags: [a]\nbody\n' \
+  'tags:[a]\nbody\n' '---\ntags: [a]\n---\n' '\ntags: [a]\n' ' tags: [a]\n' 'tags: a\n' ''; do
+  kn $D/n.md "$bad"
+  fail_case "decision first line, content '$bad'" "$D/n.md: first line must be 'tags: [..]'"
+done
+kn $L/n.md 'x\n'
+fail_case "learning without tags" "$L/n.md: first line must be 'tags: [..]'"
+kn $D/n.md 'oops\n2\n3\n4\n5\n6\n7\n'
+fail_case "both problems reported" "$D/n.md: decision exceeds 6 lines (7)
+$D/n.md: first line must be 'tags: [..]'"
+# unstaged/untracked and staged entries are checked too
+R="$(fresh)"; feat "$R"
+printf 'tags: [a]\n2\n3\n4\n5\n6\n7\n' > "$R/$D/n.md"
+printf 'nope\n' > "$R/$L/n.md"
+run_check "$R" shared
+fail_case "untracked entries" "$D/n.md: decision exceeds 6 lines (7)
+$L/n.md: first line must be 'tags: [..]'"
+git -C "$R" add -A
+run_check "$R" shared
+fail_case "staged entries" "$D/n.md: decision exceeds 6 lines (7)
+$L/n.md: first line must be 'tags: [..]'"
+# a staged entry is read from the index, not from the working tree
+printf 'tags: [a]\nshort\n' > "$R/$D/n.md"
+printf 'tags: [a]\nshort\n' > "$R/$L/n.md"
+run_check "$R" shared
+fail_case "staged entry rewritten in the working tree: the index is checked" "$D/n.md: decision exceeds 6 lines (7)
+$L/n.md: first line must be 'tags: [..]'"
+git -C "$R" add -A
+run_check "$R" shared
+pass_case "entries fixed and staged"
+# existing entries are not content-checked (editing them is a separate violation)
+R="$(fresh)"; feat "$R"; printf 'junk\n' > "$R/$D/d1.md"
+run_check "$R" shared
+fail_case "existing entry edited: only the edit is reported" "$D/d1.md: $KNOW"
+
+# regular files only
+R="$(fresh)"; feat "$R"
+ln -s ../../../src/a.java "$R/$D/link.md"
+run_check "$R" shared
+fail_case "untracked symlink" "$D/link.md: knowledge entry must be a regular file"
+git -C "$R" add -A
+run_check "$R" shared
+fail_case "staged symlink" "$D/link.md: knowledge entry must be a regular file"
+ci "$R"
+run_check "$R" shared
+fail_case "committed symlink" "$D/link.md: knowledge entry must be a regular file"
+R="$(fresh)"; feat "$R"
+ln -s /etc/hosts "$R/$L/hosts.md"
+run_check "$R" shared
+fail_case "symlink to a long file: not read, not counted" "$L/hosts.md: knowledge entry must be a regular file"
+R="$(fresh)"; feat "$R"
+h="$(printf 'tags: [a]\n' | git -C "$R" hash-object -w --stdin)"
+git -C "$R" update-index --add --cacheinfo "120000,$h,$D/idx.md"
+git -C "$R" commit -q -m "symlink straight into the index"
+run_check "$R" shared
+fail_case "symlink only in the index" "$D/idx.md: knowledge entry must be a regular file"
+R="$(fresh)"; feat "$R"
+h="$(printf 'tags: [a]\n' | git -C "$R" hash-object -w --stdin)"
+git -C "$R" update-index --add --cacheinfo "100755,$h,$D/exe.md"
+git -C "$R" commit -q -m "executable entry"
+run_check "$R" shared
+pass_case "executable regular file is still a regular file"
+R="$(fresh)"; feat "$R"
+h="$(printf 'tags: [a]\n' | git -C "$R" hash-object -w --stdin)"
+git -C "$R" update-index --add --cacheinfo "160000,$(git -C "$R" rev-parse HEAD),$L/sub.md"
+git -C "$R" commit -q -m "gitlink entry"
+run_check "$R" shared
+fail_case "gitlink in place of an entry" "$L/sub.md: knowledge entry must be a regular file"
 
 exit 0

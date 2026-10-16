@@ -6,8 +6,11 @@
 #   - one warning line when .rx/scripts is older than the plugin that shipped it
 # Targets macOS bash 3.2 + BSD userland. Deliberately no `set -e`.
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-. "$SCRIPT_DIR/rx-lib.sh"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [ ! -f "$SCRIPT_DIR/rx-lib.sh" ] || ! . "$SCRIPT_DIR/rx-lib.sh"; then
+  printf 'rx-status: rx-lib.sh not found\n' >&2
+  exit 2
+fi
 rx_noop_unless_enabled
 
 ALL=0
@@ -23,7 +26,7 @@ done
 
 ROOT="$(rx_root)"
 
-# _st_counts: read tasks.md text on stdin; print "<done> <total>". Tolerates CRLF
+# _st_counts: read tasks.md (or, in the quick lane, quick.md) text on stdin; print "<done> <total>". Tolerates CRLF
 # and a missing final newline.
 _st_counts() {
   local text d t
@@ -50,7 +53,8 @@ _st_remote_line() {
     printf '%s %s  (no state.md)\n' "$marker" "$id"
     return 0
   fi
-  if tasks="$(git -C "$ROOT" show "$ref:specs/$id/tasks.md" 2>/dev/null)"; then
+  if tasks="$(git -C "$ROOT" show "$ref:specs/$id/tasks.md" 2>/dev/null)" ||
+    tasks="$(git -C "$ROOT" show "$ref:specs/$id/quick.md" 2>/dev/null)"; then
     counts="$(printf '%s' "$tasks" | _st_counts)"
     tasks="$(_st_frac "${counts% *}" "${counts#* }")"
   else
@@ -113,6 +117,7 @@ if ACTIVE="$(rx_feature_id)"; then
     exit 1
   }
   tasks_file="$ROOT/specs/$ACTIVE/tasks.md"
+  [ -f "$tasks_file" ] || tasks_file="$ROOT/specs/$ACTIVE/quick.md"
   if [ -f "$tasks_file" ]; then
     counts="$(_st_counts < "$tasks_file")"
     tasks="$(_st_frac "${counts% *}" "${counts#* }")"

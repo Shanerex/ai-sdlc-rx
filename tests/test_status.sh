@@ -337,5 +337,46 @@ run_script "$PL/scripts/rx-status.sh" "$S" --all
 assert_eq "" "$OUT$ERR" "no config: stale check silent too"
 assert_eq "0" "$RC" "no config: rc 0"
 
+# ---------- quick lane: tasks come from quick.md when there is no tasks.md ----------
+Q="$(new_repo)"
+git -C "$Q" checkout -q -b feature/q
+mkstate "$Q" q build awaiting-human none approved:rex:2026-10-16 none none "go"
+printf -- '---\nstatus: final\n---\n# Quick: q\n\n## Tasks\n- [x] T-1 (AC-1): a\n- [ ] T-2 (AC-1): b\n- [ ] T-3 (AC-1): c\n' > "$Q/specs/q/quick.md"
+run_status "$Q"
+assert_contains "$OUT" "tasks:   1/3" "quick lane: counted from quick.md"
+printf -- '- [x] T-1 (AC-1): a\n' > "$Q/specs/q/tasks.md"
+run_status "$Q"
+assert_contains "$OUT" "tasks:   1/1" "tasks.md wins over quick.md"
+rm "$Q/specs/q/tasks.md"
+git -C "$Q" remote add origin "$T/origin.git"
+git -C "$Q" add specs
+git -C "$Q" commit -q -m q
+git -C "$Q" push -q origin feature/q 2>/dev/null
+git -C "$A" fetch -q origin
+run_status "$A" --all
+assert_contains "$OUT" "
+  q  build/awaiting-human  1/3  g1=none g2=approved:rex:2026-10-16 g3=none" "--all: quick lane branch counted from quick.md"
+
+# ---------- CDPATH and the lib check ----------
+CD="$(cd "$(fixture_tmpdir)" && pwd -P)"
+fixture_repo "$CD/r"
+fixture_config "$CD/r"
+mkdir -p "$CD/r/scripts" "$CD/decoy/scripts"
+cp "$PL/scripts/rx-lib.sh" "$PL/scripts/rx-status.sh" "$CD/r/scripts/"
+OUT="$(cd "$CD/r" && CDPATH="$CD/decoy:." bash scripts/rx-status.sh 2>&1)"
+RC=$?
+assert_eq "no active feature" "$OUT" "CDPATH decoy: normal output"
+assert_eq "0" "$RC" "CDPATH decoy: rc 0"
+LONE="$(fixture_tmpdir)"
+cp "$PL/scripts/rx-status.sh" "$LONE/rx-status.sh"
+run_script "$LONE/rx-status.sh" "$CD/r"
+assert_eq "rx-status: rx-lib.sh not found" "$ERR" "missing lib: message"
+assert_eq "" "$OUT" "missing lib: stdout empty"
+assert_eq "2" "$RC" "missing lib: rc 2"
+printf 'return 1\n' > "$LONE/rx-lib.sh"
+run_script "$LONE/rx-status.sh" "$CD/r"
+assert_eq "rx-status: rx-lib.sh not found" "$ERR" "failing lib: message"
+assert_eq "2" "$RC" "failing lib: rc 2"
+
 [ "$RX_FAILS" -eq 0 ] && echo "test_status: ok"
 exit 0

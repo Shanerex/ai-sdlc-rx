@@ -2,14 +2,20 @@
 # rx-check.sh <specs|shared|done> [feature-id]: deterministic gates for the rx toolkit.
 # No LLM, no network. Used by /rx:next, pre-commit and CI.
 #   specs [feature-id]  spec-file hygiene: line caps, required headings, frontmatter,
-#                       ID uniqueness, task line format, tasks cite existing ACs
+#                       ID uniqueness, task line format (every checkbox line in tasks.md /
+#                       quick.md must be a well-formed task line), tasks cite existing ACs
 #   shared [feature-id] merge-safety: a feature branch (net change since the merge base
 #                       with base_branch, working tree and untracked files included) may
 #                       only touch code, its own specs/<id>/ and NEW files under
-#                       docs/knowledge/{decisions,learnings}/
-#   done [feature-id]   close-out gate: runs specs and shared for the id, then requires
-#                       g1/g2/g3 approved, every task in tasks.md/quick.md ticked, and
-#                       test_cmd and lint_cmd (if set) to exit 0 within test_timeout
+#                       docs/knowledge/{decisions,learnings}/ (regular files, at most 6 / 5
+#                       lines, first line `tags: [..]`). version_bump: feature (default
+#                       release) lifts the version_file protection.
+#   done [feature-id]   close-out gate: runs specs and shared for the id, then requires the
+#                       lane's files (full: state, requirements, plan, tasks, review; quick:
+#                       state + quick.md; never mixed), `status: final` on every spec file
+#                       but state.md, no leftover review.qa/security files, gates approved
+#                       (full: g1 g2 g3; quick: g2), every task in tasks.md/quick.md ticked,
+#                       and test_cmd and lint_cmd (if set) exiting 0 within test_timeout
 #                       seconds (default 600; a timed-out command's process tree is
 #                       killed). All checks always run and all violations are reported.
 #                       bump only has to be a valid value (none is an explicit choice);
@@ -21,7 +27,7 @@
 # Each subcommand is a function _chk_<name> in this file; add new ones to the
 # dispatcher at the bottom.
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 if [ ! -f "$SCRIPT_DIR/rx-lib.sh" ] || ! . "$SCRIPT_DIR/rx-lib.sh"; then
   printf 'rx-check: rx-lib.sh not found\n' >&2
   exit 2
@@ -103,6 +109,33 @@ _chk_v() {
   VIOL="${VIOL}specs/${CUR_ID}/${1}: ${2}"$'\n'
 }
 
+# Task lines (tasks.md, quick.md). ONE definition, used by specs (format) and done (ticks).
+# A "checkbox line" is any list item that opens with [..]: bullets - * +, numbered 1. 2).
+# Every checkbox line must be a well-formed task line, so an unfinished item cannot hide
+# behind a malformed or id-less line.
+CHK_CB_RE='^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]+\[[^]]*\]'
+CHK_TASK_RE='^- \[([ x])\] T-([0-9]+) \(AC-[0-9]+(, AC-[0-9]+)*\): .+'
+
+# _chk_task_kind <line>: set TK_KIND to none (not a checkbox line), malformed, open or
+# done, and TK_N to the task number for open/done.
+TK_KIND=""
+TK_N=""
+_chk_task_kind() {
+  TK_KIND=none
+  TK_N=""
+  [[ $1 =~ $CHK_CB_RE ]] || return 0
+  if [[ $1 =~ $CHK_TASK_RE ]]; then
+    TK_N="${BASH_REMATCH[2]}"
+    if [ "${BASH_REMATCH[1]}" = "x" ]; then
+      TK_KIND=done
+    else
+      TK_KIND=open
+    fi
+  else
+    TK_KIND=malformed
+  fi
+}
+
 # _chk_ids <AC|R> <file>: print the ids (e.g. AC-1) of the `- AC-n:` / `- R-n:` lines.
 _chk_ids() {
   local line id
@@ -124,9 +157,7 @@ _chk_ids() {
 # _chk_one_file <file>: caps, headings, frontmatter, then ID rules for that file.
 # Uses/updates the per-feature globals: VIOL, SEEN_AC, SEEN_R, SEEN_T, ALL_AC.
 _chk_one_file() {
-  local f="$1" path="$CUR_DIR/$1" cap n fm st msg heads h line id cites a rest
-  local task_re='^- \[[ x]\] T-[0-9]+ \(AC-[0-9]+(, AC-[0-9]+)*\): .+'
-  local trig_re='^[[:space:]]*[-*+][[:space:]]+\[[^]]*\][[:space:]]*T-'
+  local f="$1" path="$CUR_DIR/$1" cap n fm st msg heads h line id cites a
 
   # line cap: CR stripped, an unterminated last line counts (awk NR does both)
   cap="$(_chk_cap "$f")"
@@ -205,30 +236,28 @@ _chk_one_file() {
         fi
         ;;
     esac
-    # task lines (tasks.md, quick.md): the trigger is wide so near misses cannot hide,
-    # the format is strict; only well-formed lines take part in the id checks
+    # task lines (tasks.md, quick.md): see _chk_task_kind; only well-formed lines take
+    # part in the id checks
     case "$f" in
       tasks.md|quick.md)
-        if [[ $line =~ $trig_re ]]; then
-          if [[ $line =~ $task_re ]]; then
-            rest="${line#*T-}"
-            id="T-${rest%% *}"
-            case "$SEEN_T" in
-              *"|$id|"*) _chk_v "$f" "duplicate $id" ;;
-              *) SEEN_T="${SEEN_T}|${id}|" ;;
+        _chk_task_kind "$line"
+        if [ "$TK_KIND" = "malformed" ]; then
+          _chk_v "$f" "malformed task line '${line:0:40}'"
+        elif [ "$TK_KIND" != "none" ]; then
+          id="T-$TK_N"
+          case "$SEEN_T" in
+            *"|$id|"*) _chk_v "$f" "duplicate $id" ;;
+            *) SEEN_T="${SEEN_T}|${id}|" ;;
+          esac
+          cites="${line#*\(}"
+          cites="${cites%%\)*}"
+          cites="${cites//,/ }"
+          for a in $cites; do
+            case "$ALL_AC" in
+              *"|$a|"*) ;;
+              *) _chk_v "$f" "$id cites unknown $a" ;;
             esac
-            cites="${line#*\(}"
-            cites="${cites%%\)*}"
-            cites="${cites//,/ }"
-            for a in $cites; do
-              case "$ALL_AC" in
-                *"|$a|"*) ;;
-                *) _chk_v "$f" "$id cites unknown $a" ;;
-              esac
-            done
-          else
-            _chk_v "$f" "malformed task line '${line:0:40}'"
-          fi
+          done
         fi
         ;;
     esac
@@ -329,6 +358,58 @@ _chk_sv() {
   SH_KEYS[$i]="$key"
 }
 
+# _chk_vbump: validate version_bump (release|feature, default release) into SH_VB; exit 2 on
+# anything else. `feature` means the version file is bumped per feature, so it is not shared.
+SH_VB=""
+_chk_vbump() {
+  SH_VB="$(rx_cfg version_bump release)"
+  case "$SH_VB" in
+    release|feature) ;;
+    *)
+      printf "rx-check: invalid version_bump '%s' (release|feature)\n" "$SH_VB" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# _chk_know_entry <path>: content rules for a NEW decision/learning entry: a regular file,
+# at most 6 (decision) / 5 (learning) lines counted like specs (CR stripped, a missing final
+# newline counts), first line `tags: [..]`. Read from the index when the path is staged,
+# else from the working tree. Needs SH_ROOT and SH_TMP.
+_chk_know_entry() {
+  local p="$1" kind cap rec mode="" staged=0 n first
+  local tags_re='^tags: \[.*\]$'
+  case "$p" in
+    docs/knowledge/decisions/*) kind=decision; cap=6 ;;
+    *) kind=learning; cap=5 ;;
+  esac
+  rec="$(git -C "$SH_ROOT" ls-files -s -z -- ":(literal)$p" 2>/dev/null | tr '\0' '\n' | head -n 1)"
+  if [ -n "$rec" ]; then
+    staged=1
+    mode="${rec%% *}"
+  fi
+  if { [ "$staged" -eq 1 ] && [ "$mode" != "100644" ] && [ "$mode" != "100755" ]; } || [ -L "$SH_ROOT/$p" ]; then
+    _chk_sv "$p" "knowledge entry must be a regular file"
+    return 0
+  fi
+  if [ "$staged" -eq 1 ]; then
+    git -C "$SH_ROOT" cat-file blob ":$p" > "$SH_TMP/entry" 2>/dev/null
+  else
+    cat "$SH_ROOT/$p" > "$SH_TMP/entry" 2>/dev/null
+  fi || {
+    printf 'rx-check: cannot read %s\n' "$p" >&2
+    exit 2
+  }
+  n="$(tr -d '\r' < "$SH_TMP/entry" | awk 'END { print NR }')"
+  if [ "$n" -gt "$cap" ]; then
+    _chk_sv "$p" "$kind exceeds $cap lines ($n)"
+  fi
+  first=""
+  IFS= read -r first < "$SH_TMP/entry" || true
+  first="${first%$'\r'}"
+  [[ $first =~ $tags_re ]] || _chk_sv "$p" "first line must be 'tags: [..]'"
+}
+
 # _chk_shared_rule <status> <path> <lowercased-path>: record a violation for one changed
 # path, if it breaks a rule. First matching rule wins. Matching of the protected NAMES
 # is case-insensitive (a branch must not slip CLAUDE.md past the gate as claude.md); the
@@ -367,7 +448,10 @@ _chk_shared_rule() {
           case "$name" in
             */*|.md) ;;
             *)
-              [ "$st" = "A" ] && return 0
+              if [ "$st" = "A" ]; then
+                _chk_know_entry "$p"
+                return 0
+              fi
               ;;
           esac
           ;;
@@ -410,6 +494,7 @@ _chk_shared() {
     exit 2
   fi
   base="$(rx_require_cfg base_branch)" || exit 2
+  _chk_vbump
   if [ "$#" -eq 1 ]; then
     if ! _rx_valid_id "$1"; then
       printf "rx-check: invalid feature id '%s'\n" "$1" >&2
@@ -452,6 +537,7 @@ _chk_shared() {
 
   vf="$(rx_cfg version_file)"
   vf="${vf#./}"
+  [ "$SH_VB" = "feature" ] && vf=""
   SH_VF="$(printf '%s' "$vf" | tr 'A-Z' 'a-z')"
 
   # change set: NUL-delimited <status> <path> records, the union of the NET change since
@@ -519,31 +605,66 @@ _chk_dv() {
   DN_V="${DN_V}${1}"$'\n'
 }
 
+# _chk_done_lanes <id>: lane files. quick.md present means the quick lane (state.md +
+# quick.md, review.md optional), otherwise the full lane (state, requirements, plan, tasks,
+# review). The lanes are exclusive; every present file but state.md must be `status: final`;
+# leftover qa/security files must have been merged. Sets DN_LANE (quick|full).
+DN_LANE=full
+_chk_done_lanes() {
+  local id="$1" d="$CHK_ROOT/specs/$1" f fm st required
+  if [ -f "$d/quick.md" ]; then
+    DN_LANE=quick
+    required="state.md quick.md"
+    for f in requirements.md plan.md tasks.md; do
+      if [ -e "$d/$f" ]; then
+        _chk_dv "specs/${id}: quick and full lane files cannot be mixed"
+        break
+      fi
+    done
+  else
+    DN_LANE=full
+    required="state.md requirements.md plan.md tasks.md review.md"
+  fi
+  for f in $required; do
+    [ -e "$d/$f" ] || _chk_dv "specs/${id}/${f}: required for ${DN_LANE} lane"
+  done
+  for f in requirements.md plan.md tasks.md review.md quick.md; do
+    [ -f "$d/$f" ] || continue
+    st=""
+    if fm="$(_rx_fm "$d/$f")"; then
+      st="$(_rx_fm_get "$fm" status)" || st=""
+    fi
+    [ "$st" = "final" ] || _chk_dv "specs/${id}/${f}: status must be final"
+  done
+  for f in review.qa.md review.security.md; do
+    [ -e "$d/$f" ] && _chk_dv "specs/${id}/${f}: merge into review.md and delete"
+  done
+  return 0
+}
+
 # _chk_done_tasks <id>: every task line of tasks.md / quick.md must be ticked, and there
-# must be at least one task somewhere. Malformed task lines are reported by `specs`.
+# must be at least one task in each present file. Checkbox lines that are not well-formed
+# task lines are reported by `specs` (same definition: _chk_task_kind).
 _chk_done_tasks() {
-  local id="$1" d="$CHK_ROOT/specs/$1" f line found=0 count
-  local re='^- \[([ x])\] T-([0-9]+)'
+  local id="$1" d="$CHK_ROOT/specs/$1" f line count
   for f in tasks.md quick.md; do
     [ -f "$d/$f" ] || continue
-    found=1
     count=0
     while IFS= read -r line || [ -n "$line" ]; do
       line="${line%$'\r'}"
-      if [[ $line =~ $re ]]; then
-        count=$((count + 1))
-        if [ "${BASH_REMATCH[1]}" = " " ]; then
-          _chk_dv "specs/${id}/${f}: T-${BASH_REMATCH[2]} not done"
-        fi
-      fi
+      _chk_task_kind "$line"
+      case "$TK_KIND" in
+        open)
+          count=$((count + 1))
+          _chk_dv "specs/${id}/${f}: T-${TK_N} not done"
+          ;;
+        done) count=$((count + 1)) ;;
+      esac
     done < "$d/$f"
     if [ "$count" -eq 0 ]; then
       _chk_dv "specs/${id}/${f}: no tasks found"
     fi
   done
-  if [ "$found" -eq 0 ]; then
-    _chk_dv "specs/${id}: no tasks.md or quick.md"
-  fi
 }
 
 # _chk_done_cmd <label> <key> <command>: run a user command from the repo root with the
@@ -573,9 +694,30 @@ _chk_done_cmd() {
   fi
 }
 
+# _chk_done_sub <name> <rc> <output>: take the result of a reused check. 0 is clean, 1 must
+# come with violation lines, 2 already printed its message; anything else (a crash, a
+# signal, a violation status without a report) must not pass: fail closed.
+_chk_done_sub() {
+  case "$2" in
+    0) ;;
+    1)
+      if [ -z "$3" ]; then
+        printf 'rx-check: unexpected status 1 from %s\n' "$1" >&2
+        exit 2
+      fi
+      ;;
+    2) exit 2 ;;
+    *)
+      printf 'rx-check: unexpected status %s from %s\n' "$2" "$1" >&2
+      exit 2
+      ;;
+  esac
+  [ -z "$3" ] || _chk_dv "$3"
+}
+
 # _chk_done [feature-id]
 _chk_done() {
-  local id out rc g v test_cmd lint_cmd
+  local id out rc g v test_cmd lint_cmd gates
   if [ "$#" -gt 1 ]; then
     _chk_usage
   fi
@@ -595,6 +737,7 @@ _chk_done() {
   fi
 
   # configuration first, so that an environment error costs nothing
+  _chk_vbump
   test_cmd="$(rx_require_cfg test_cmd)" || exit 2
   lint_cmd="$(rx_cfg lint_cmd)"
   DN_TIMEOUT="$(rx_cfg test_timeout 600)"
@@ -615,16 +758,16 @@ _chk_done() {
   # a. specs and b. shared, in subshells: their violation lines are captured verbatim and
   # their exit 2 (message already on stderr) aborts `done` the same way.
   out="$(_chk_specs "$id")"
-  rc=$?
-  [ "$rc" -ne 2 ] || exit 2
-  [ -z "$out" ] || _chk_dv "$out"
+  _chk_done_sub specs $? "$out"
   out="$(_chk_shared "$id")"
-  rc=$?
-  [ "$rc" -ne 2 ] || exit 2
-  [ -z "$out" ] || _chk_dv "$out"
+  _chk_done_sub shared $? "$out"
 
-  # c. gates (state.md validity itself is part of the specs output)
-  for g in g1 g2 g3; do
+  # c. lanes, then gates: the full lane needs g1-g3, the quick lane only g2 (its single
+  # pre-build authorization). state.md validity itself is part of the specs output.
+  _chk_done_lanes "$id"
+  gates="g1 g2 g3"
+  [ "$DN_LANE" = "quick" ] && gates="g2"
+  for g in $gates; do
     v="$(rx_state_get "$id" "$g")" || v=""
     case "$v" in
       approved:*) ;;

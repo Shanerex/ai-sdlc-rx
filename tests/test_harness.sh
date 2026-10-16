@@ -73,6 +73,17 @@ assert_contains "$out" "FAIL test_b.sh"
 assert_contains "$out" "PASS test_a.sh"
 assert_contains "$out" "1 failed"
 
+# --- run.sh: no test files found is an error, not a green run
+mkdir -p "$t/empty" "$t/other"
+printf 'x\n' > "$t/other/notatest.sh"
+for e in "$t/empty" "$t/other" "$t/missing"; do
+  ef="$t/err.txt"
+  out="$(bash "$HERE/run.sh" "$e" 2>"$ef")"; rc=$?
+  assert_eq "1" "$rc" "run.sh exits 1 when it finds no test files ($(basename "$e"))"
+  assert_contains "$(cat "$ef")" "no test files" "run.sh says so on stderr ($(basename "$e"))"
+  assert_eq "" "$out" "run.sh prints no PASS/summary when it finds none ($(basename "$e"))"
+done
+
 # --- a swallowed assertion failure still fails the file (EXIT trap)
 printf '. "%s/lib/assert.sh"\nassert_eq 1 2 swallowed || true\nexit 0\n' "$HERE" > "$t/swallow.sh"
 rc=0; bash "$t/swallow.sh" >/dev/null 2>&1 || rc=$?

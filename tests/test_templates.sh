@@ -90,6 +90,11 @@ if [ -f "$SKILL" ]; then
   grep -Fq 'first line `tags: [a, b]`' "$SKILL" || assert_eq "tags-first-line rule" "missing" "SKILL.md knowledge entry shape"
   grep -Fq 'cap counts the whole file' "$SKILL" || assert_eq "whole-file cap rule" "missing" "SKILL.md knowledge entry cap"
   grep -Fq 'collapse older log lines into one summary line' "$SKILL" || assert_eq "log collapse rule" "missing" "SKILL.md log overflow"
+  for phrase in '## Lanes' 'Full lane' 'Quick lane' 'only gate is `g2`' 'there is no `g3`' 'never mix' \
+                'status: final' 'Finalized by' 'review.qa.md' 'required `## ` headings' 'every checkbox line'; do
+    grep -Fqi -- "$phrase" "$SKILL" || assert_eq "$phrase" "missing" "SKILL.md lane contract mentions: $phrase"
+  done
+  ! grep -Fq 'add none, drop none' "$SKILL" || assert_eq "reworded" "add none, drop none" "SKILL.md heading rule wording"
   for tok in 'R-' 'AC-' 'T-' UNDERSTANDING OPTIONS ASSUMPTIONS QUESTIONS 'templates/' 'tags:'; do
     grep -Fq -- "$tok" "$SKILL" || assert_eq "$tok" "missing" "SKILL.md mentions $tok"
   done

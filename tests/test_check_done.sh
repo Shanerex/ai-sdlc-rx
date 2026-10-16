@@ -49,7 +49,7 @@ exit 1
 EOS
 
 # One template repo: main has CLAUDE.md and code; feature/x adds a complete, passing feature
-# built from the REAL templates. The config is excluded from git so each case can rewrite it.
+# built from the REAL templates (all files finalized: status: final). The config is excluded from git so each case can rewrite it.
 TEMPLATE="$(cd "$(fixture_tmpdir)" && pwd -P)/t"
 fixture_repo "$TEMPLATE"
 mkdir -p "$TEMPLATE/src"
@@ -68,6 +68,7 @@ sed -e 's/<feature-id>/x/' -e 's/^phase: .*/phase: close/' -e 's/^status: .*/sta
 sed -e 's/<feature-id>/x/' -e 's/^status: draft/status: final/' -e 's/<what the system must do>/do it/' \
   -e 's/<observable pass\/fail condition>/it is done/' "$TPL/requirements.md" > "$TEMPLATE/specs/x/requirements.md"
 sed -e 's/<feature-id>/x/' -e 's/^status: draft/status: final/' "$TPL/plan.md" > "$TEMPLATE/specs/x/plan.md"
+sed -e 's/<feature-id>/x/' -e 's/^status: draft/status: final/' "$TPL/review.md" > "$TEMPLATE/specs/x/review.md"
 {
   sed -e 's/<feature-id>/x/' -e 's/^status: draft/status: final/' \
     -e 's/^- \[ \] T-1 (AC-1): .*/- [x] T-1 (AC-1): first step/' "$TPL/tasks.md"
@@ -231,6 +232,7 @@ R="$(fresh)"
 rm "$R/specs/x/state.md"
 run_check "$R" done
 fail_case "no state.md" "specs/x/state.md: not found
+specs/x/state.md: required for full lane
 specs/x/state.md: g1 not approved
 specs/x/state.md: g2 not approved
 specs/x/state.md: g3 not approved"
@@ -254,7 +256,7 @@ fail_case "CRLF tasks.md" "specs/x/tasks.md: T-2 not done"
 R="$(fresh)"
 rm "$R/specs/x/tasks.md"
 run_check "$R" done
-fail_case "no tasks.md and no quick.md" "specs/x: no tasks.md or quick.md"
+fail_case "no tasks.md and no quick.md" "specs/x/tasks.md: required for full lane"
 R="$(fresh)"
 sedf "$R/specs/x/tasks.md" '/^- \[/d'
 run_check "$R" done
@@ -267,7 +269,7 @@ specs/x/tasks.md: T-2 not done"
 
 # quick lane: state + quick.md, no requirements/plan/tasks
 quick_lane() {
-  rm "$1/specs/x/requirements.md" "$1/specs/x/plan.md" "$1/specs/x/tasks.md"
+  rm "$1/specs/x/requirements.md" "$1/specs/x/plan.md" "$1/specs/x/tasks.md" "$1/specs/x/review.md"
   sed -e 's/<feature-id>/x/' -e 's/^status: draft/status: final/' -e 's/<what and why[^>]*>/tiny/' \
     -e 's/<observable pass\/fail condition>/it works/' \
     -e 's/^- \[ \] T-1 (AC-1): .*/- [x] T-1 (AC-1): do it/' "$TPL/quick.md" > "$1/specs/x/quick.md"
@@ -290,7 +292,175 @@ R="$(fresh)"
 quick_lane "$R"
 rm "$R/specs/x/quick.md"
 run_check "$R" done
-fail_case "quick lane, quick.md missing" "specs/x: no tasks.md or quick.md"
+fail_case "quick.md missing: the full lane is required" "specs/x/requirements.md: required for full lane
+specs/x/plan.md: required for full lane
+specs/x/tasks.md: required for full lane
+specs/x/review.md: required for full lane"
+
+
+# ---------- lanes ----------
+# quick lane: g2 is its only gate; g1 and g3 are not required
+R="$(fresh)"
+quick_lane "$R"
+sedf "$R/specs/x/state.md" -e 's/^g1: .*/g1: none/' -e 's/^g3: .*/g3: none/'
+run_check "$R" done
+pass_case "quick lane: g1 and g3 not required"
+sedf "$R/specs/x/state.md" 's/^g2: .*/g2: none/'
+run_check "$R" done
+fail_case "quick lane: g2 required" "specs/x/state.md: g2 not approved"
+# an optional review.md is fine in the quick lane (and must be final)
+R="$(fresh)"
+quick_lane "$R"
+sed -e 's/<feature-id>/x/' -e 's/^status: draft/status: final/' "$TPL/review.md" > "$R/specs/x/review.md"
+run_check "$R" done
+pass_case "quick lane with a final review.md"
+sedf "$R/specs/x/review.md" 's/^status: final/status: draft/'
+run_check "$R" done
+fail_case "quick lane with a draft review.md" "specs/x/review.md: status must be final"
+# quick lane: missing quick.md's partner state.md
+R="$(fresh)"
+quick_lane "$R"
+rm "$R/specs/x/state.md"
+run_check "$R" done
+fail_case "quick lane without state.md" "specs/x/state.md: not found
+specs/x/state.md: required for quick lane
+specs/x/state.md: g2 not approved"
+
+# full lane: all five files are required
+for f in requirements plan tasks review; do
+  R="$(fresh)"
+  rm "$R/specs/x/$f.md"
+  run_check "$R" done
+  assert_contains "$OUT" "specs/x/$f.md: required for full lane" "full lane without $f.md"
+  assert_eq "1" "$RC" "full lane without $f.md: rc 1"
+done
+R="$(fresh)"
+rm "$R/specs/x/review.md"
+run_check "$R" done
+fail_case "full lane without review.md" "specs/x/review.md: required for full lane"
+R="$(fresh)"
+rm "$R/specs/x/requirements.md" "$R/specs/x/plan.md" "$R/specs/x/review.md"
+run_check "$R" done
+assert_contains "$OUT" "specs/x/requirements.md: required for full lane
+specs/x/plan.md: required for full lane
+specs/x/review.md: required for full lane" "several missing files, one line each, fixed order"
+
+# lanes are exclusive
+R="$(fresh)"
+quick_lane "$R"
+sed -e 's/<feature-id>/x/' -e 's/^status: draft/status: final/' "$TPL/plan.md" > "$R/specs/x/plan.md"
+run_check "$R" done
+fail_case "quick.md with plan.md" "specs/x: quick and full lane files cannot be mixed"
+R="$(fresh)"
+quick_lane "$R"
+sed -e 's/<feature-id>/x/' -e 's/^status: draft/status: final/' -e '/^- AC-/d' "$TPL/requirements.md" > "$R/specs/x/requirements.md"
+run_check "$R" done
+fail_case "quick.md with requirements.md" "specs/x: quick and full lane files cannot be mixed"
+R="$(fresh)"
+quick_lane "$R"
+printf -- '---\nstatus: final\n---\n# Tasks: x\n\n## Tasks\n- [x] T-5 (AC-1): other\n' > "$R/specs/x/tasks.md"
+run_check "$R" done
+fail_case "quick.md with tasks.md" "specs/x: quick and full lane files cannot be mixed"
+R="$(fresh)"
+cp "$TPL/quick.md" "$R/specs/x/quick.md"
+sedf "$R/specs/x/quick.md" -e 's/^status: draft/status: final/' -e 's/^- \[ \]/- [x]/'
+run_check "$R" done
+assert_contains "$OUT" "specs/x: quick and full lane files cannot be mixed" "full lane files plus quick.md"
+
+# ---------- status: final ----------
+R="$(fresh)"
+for f in requirements plan tasks review; do sedf "$R/specs/x/$f.md" 's/^status: final/status: draft/'; done
+run_check "$R" done
+fail_case "all draft" "specs/x/requirements.md: status must be final
+specs/x/plan.md: status must be final
+specs/x/tasks.md: status must be final
+specs/x/review.md: status must be final"
+for f in requirements plan tasks review; do
+  R="$(fresh)"
+  sedf "$R/specs/x/$f.md" 's/^status: final/status: draft/'
+  run_check "$R" done
+  fail_case "$f.md draft" "specs/x/$f.md: status must be final"
+done
+R="$(fresh)"
+sedf "$R/specs/x/state.md" 's/^status: .*/status: draft/'
+run_check "$R" done
+pass_case "state.md is not subject to the final rule"
+R="$(fresh)"
+quick_lane "$R"
+sedf "$R/specs/x/quick.md" 's/^status: final/status: draft/'
+run_check "$R" done
+fail_case "quick.md draft" "specs/x/quick.md: status must be final"
+R="$(fresh)"
+sedf "$R/specs/x/plan.md" '1,3d'
+run_check "$R" done
+assert_contains "$OUT" "specs/x/plan.md: status must be final" "no frontmatter at all is not final"
+
+# ---------- leftover qa/security files ----------
+for f in review.qa.md review.security.md; do
+  R="$(fresh)"
+  printf -- '---\nstatus: draft\n---\n# findings\n' > "$R/specs/x/$f"
+  run_check "$R" done
+  fail_case "leftover $f" "specs/x/$f: merge into review.md and delete"
+done
+R="$(fresh)"
+printf -- '---\nstatus: draft\n---\n' > "$R/specs/x/review.qa.md"
+cp "$R/specs/x/review.qa.md" "$R/specs/x/review.security.md"
+run_check "$R" done
+fail_case "both leftovers" "specs/x/review.qa.md: merge into review.md and delete
+specs/x/review.security.md: merge into review.md and delete"
+
+# ---------- unticked checkboxes cannot hide ----------
+R="$(fresh)"
+printf -- '- [ ] fix the remaining failing tests\n' >> "$R/specs/x/tasks.md"
+run_check "$R" done
+fail_case "loose unticked checkbox" "specs/x/tasks.md: malformed task line '- [ ] fix the remaining failing tests'"
+R="$(fresh)"
+printf -- '1. [ ] T-2 (AC-1): hidden\n' >> "$R/specs/x/tasks.md"
+run_check "$R" done
+fail_case "numbered unticked checkbox" "specs/x/tasks.md: malformed task line '1. [ ] T-2 (AC-1): hidden'"
+R="$(fresh)"
+quick_lane "$R"
+printf -- '* [ ] one more thing\n' >> "$R/specs/x/quick.md"
+run_check "$R" done
+fail_case "loose unticked checkbox in quick.md" "specs/x/quick.md: malformed task line '* [ ] one more thing'"
+
+# ---------- version_bump ----------
+R="$(fresh version_bump=feature)"
+run_check "$R" done
+pass_case "version_bump feature"
+R="$(fresh version_bump=sometimes)"
+run_check "$R" done
+err_case "invalid version_bump" "rx-check: invalid version_bump 'sometimes' (release|feature)"
+
+# ---------- fail closed on an unexpected status from specs/shared ----------
+PATCHED="$(fixture_tmpdir)"
+mkdir -p "$PATCHED/scripts"
+cp "$ROOT"/scripts/*.sh "$PATCHED/scripts/"
+cp -R "$ROOT/skills" "$PATCHED/skills"
+# patch <stub>: insert a stub function before the dispatcher runs
+patch_check() {
+  awk -v stub="$1" '/^SUB=/ { print stub } { print }' "$ROOT/scripts/rx-check.sh" > "$PATCHED/scripts/rx-check.sh"
+}
+R="$(fresh)"
+patch_check '_chk_specs() { return 3; }'
+run_script() { local ef; ef="$(mktemp "$RX_TMP_ROOT/err.XXXXXX")"; OUT="$(cd "$1" && "$PATCHED/scripts/rx-check.sh" "${@:2}" 2>"$ef")"; RC=$?; ERR="$(cat "$ef")"; rm -f "$ef"; }
+run_script "$R" done
+err_case "specs returns 3" "rx-check: unexpected status 3 from specs"
+patch_check '_chk_specs() { return 1; }'
+run_script "$R" done
+err_case "specs returns 1 without output" "rx-check: unexpected status 1 from specs"
+patch_check '_chk_shared() { return 1; }'
+run_script "$R" done
+err_case "shared returns 1 without output" "rx-check: unexpected status 1 from shared"
+patch_check '_chk_shared() { return 139; }'
+run_script "$R" done
+err_case "shared returns 139" "rx-check: unexpected status 139 from shared"
+patch_check '_chk_shared() { echo "x: y"; return 1; }'
+run_script "$R" done
+fail_case "shared output with 1 is a normal violation" "x: y"
+patch_check ':'
+run_script "$R" done
+pass_case "unpatched copy still passes"
 
 # ---------- bubbling up specs and shared ----------
 R="$(fresh)"
@@ -313,6 +483,7 @@ sedf "$R/specs/x/tasks.md" 's/^- \[x\] T-1/- [ ] T-1/'
 run_check "$R" done
 fail_case "everything wrong at once" "specs/x/plan.md: frontmatter status must be draft|final
 CLAUDE.md: shared file modified
+specs/x/plan.md: status must be final
 specs/x/state.md: g2 not approved
 specs/x/tasks.md: T-1 not done
 tests: test_cmd failed (exit 3)

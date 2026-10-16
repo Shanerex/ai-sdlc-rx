@@ -141,10 +141,13 @@ _rx_valid_id() {
 # branch_pattern (default feature/{id}; one `{id}` placeholder, plain string
 # stripping, never a regex) and return 0. Print nothing and return 1 if the
 # pattern lacks exactly one `{id}`, the branch does not match, or the id is
-# not valid per _rx_valid_id.
+# not valid per _rx_valid_id. The configured base_branch is never a feature branch
+# (so `branch_pattern: {id}` does not turn `main` into a feature id).
 rx_branch_id() {
-  local branch="${1-}" pattern prefix suffix id
+  local branch="${1-}" pattern prefix suffix id base
   [ -n "$branch" ] || return 1
+  base="$(rx_cfg base_branch)"
+  [ "$branch" != "$base" ] || return 1
   pattern="$(rx_cfg branch_pattern 'feature/{id}')"
   case "$pattern" in
     *'{id}'*) ;;
@@ -317,14 +320,14 @@ rx_state_valid() {
 #     enforces the limit. Both are reaped before returning: no stray processes are left
 #     behind except what the command itself leaves running after a normal exit.
 #   - A flag file `<outfile>.timeout` exists only while a timeout is being handled.
-#   - Caller state is restored: monitor mode, and the INT/TERM traps (they are replaced
+#   - Caller state is restored: monitor mode, and the INT/TERM/HUP/QUIT traps (they are replaced
 #     while it runs so that a signal to the caller also kills the command's group, then
 #     the signal is re-raised once the caller's traps are back). Never sets -e/-u,
 #     IFS or any variable; all of its own variables are local. Safe under `set -e`/-u
 #     (it only returns the status; the caller decides what to do with it).
 # Usage: rx_run_timeout 600 "$tmp" "$cmd"; rc=$?
 rx_run_timeout() {
-  local secs="${1-}" out="${2-}" cmd="${3-}" had_m=0 pid wpid rc=0 flag old_int old_term
+  local secs="${1-}" out="${2-}" cmd="${3-}" had_m=0 pid wpid rc=0 flag old_int old_term old_hup old_quit
   case "$secs" in
     ''|*[!0123456789]*|0|00*)
       printf 'rx: rx_run_timeout: seconds must be a positive integer\n' >&2
@@ -340,6 +343,8 @@ rx_run_timeout() {
   case "$-" in *m*) had_m=1 ;; esac
   old_int="$(trap -p INT)"
   old_term="$(trap -p TERM)"
+  old_hup="$(trap -p HUP)"
+  old_quit="$(trap -p QUIT)"
   set -m
   bash -c "$cmd" </dev/null >"$out" 2>&1 &
   pid=$!
@@ -353,6 +358,8 @@ rx_run_timeout() {
   wpid=$!
   trap "_rx_rt_abort INT $pid $wpid" INT
   trap "_rx_rt_abort TERM $pid $wpid" TERM
+  trap "_rx_rt_abort HUP $pid $wpid" HUP
+  trap "_rx_rt_abort QUIT $pid $wpid" QUIT
   { wait "$pid"; } 2>/dev/null && rc=0 || rc=$?
   if [ -e "$flag" ]; then
     { wait "$wpid"; } 2>/dev/null || true
@@ -362,20 +369,24 @@ rx_run_timeout() {
     kill -KILL -- "-$wpid" 2>/dev/null || true
     { wait "$wpid"; } 2>/dev/null || true
   fi
-  trap - INT TERM
+  trap - INT TERM HUP QUIT
   [ -z "$old_int" ] || eval "$old_int"
   [ -z "$old_term" ] || eval "$old_term"
+  [ -z "$old_hup" ] || eval "$old_hup"
+  [ -z "$old_quit" ] || eval "$old_quit"
   [ "$had_m" -eq 1 ] || set +m
   return "$rc"
 }
 
-# _rx_rt_abort <signal> <pid> <watcher-pid>: INT/TERM handler of rx_run_timeout. Kills
+# _rx_rt_abort <signal> <pid> <watcher-pid>: INT/TERM/HUP/QUIT handler of rx_run_timeout. Kills
 # both process groups, puts the caller's traps back (it reads old_int/old_term from
-# the running rx_run_timeout frame) and re-raises the signal on the shell.
+# the running rx_run_timeout frame: old_int, old_term, old_hup, old_quit) and re-raises the signal on the shell.
 _rx_rt_abort() {
   kill -KILL -- "-$2" "-$3" 2>/dev/null
-  trap - INT TERM
+  trap - INT TERM HUP QUIT
   [ -z "$old_int" ] || eval "$old_int"
   [ -z "$old_term" ] || eval "$old_term"
+  [ -z "$old_hup" ] || eval "$old_hup"
+  [ -z "$old_quit" ] || eval "$old_quit"
   kill -s "$1" $$
 }
