@@ -52,7 +52,7 @@ mkquick() {
 }
 
 # nlines <file>: line count the way the contract counts (CR stripped, last partial line counts).
-nlines() { tr -d '\r' < "$1" | awk 'END{print NR}'; }
+nlines() { LC_ALL=C tr -d '\r' < "$1" | LC_ALL=C awk 'END{print NR}'; }
 
 # pad_to <file> <n>: append plain lines until the file has exactly n lines.
 pad_to() {
@@ -410,10 +410,49 @@ assert_eq "specs/x/tasks.md: malformed task line '- [ ] T-2 (AC-1) this descript
 { cat "$TPL/tasks.md"; printf -- '- [ ] T-2 (AC-1) nope\r\n'; } > "$T"
 run_check "$R" specs x
 assert_eq "specs/x/tasks.md: malformed task line '- [ ] T-2 (AC-1) nope'" "$OUT" "malformed line CR stripped"
-# lines that merely look like tasks but are not at column 0 or lack T- are ignored
-{ cat "$TPL/tasks.md"; printf -- '  - [ ] T-9 (nope): indented\n- [ ] not a task\n- [x] done thing\nT-9 (AC-9): plain\n'; } > "$T"
+# lines with a checkbox but no T- id, and prose mentioning an id, are not task lines
+{ cat "$TPL/tasks.md"; printf -- '- [ ] not a task\n- [x] done thing\nT-9 (AC-9): plain\nsee T-3 for details\n- see T-4 (AC-9)\n'; } > "$T"
 run_check "$R" specs x
 assert_eq "" "$OUT" "non-task lines ignored"
+assert_eq "0" "$RC" "non-task lines ignored: rc 0"
+# near-miss task lines are caught by the trigger and fail the strict format
+TAB="$(printf '\t')"
+i=0
+for bad in \
+  '- [X] T-5 (AC-9): uppercase X' \
+  "- [ ]${TAB}T-6 (AC-1): tab after checkbox" \
+  '  - [ ] T-7 (AC-1): indented' \
+  "${TAB}- [ ] T-7 (AC-1): tab indented" \
+  '* [ ] T-1 (AC-1): star bullet' \
+  '+ [x] T-1 (AC-1): plus bullet' \
+  '- [ ]T-8 (AC-1): no space after checkbox' \
+  '- [] T-8 (AC-1): empty checkbox' \
+  '-  [ ] T-8 (AC-1): two spaces before checkbox' \
+  '- [-] T-8 (AC-1): odd checkbox'
+do
+  { cat "$TPL/tasks.md"; printf '%s\n' "$bad"; } > "$T"
+  run_check "$R" specs x
+  want="specs/x/tasks.md: malformed task line '$(printf '%s' "$bad" | cut -c1-40)'"
+  assert_eq "$want" "$OUT" "near-miss malformed: $bad"
+  assert_eq "1" "$RC" "near-miss malformed rc: $bad"
+done
+# near-miss lines never take part in duplicate or unknown-AC checks
+{ cat "$TPL/tasks.md"; printf -- '- [X] T-1 (AC-9): near miss\n'; } > "$T"
+run_check "$R" specs x
+assert_eq "specs/x/tasks.md: malformed task line '- [X] T-1 (AC-9): near miss'" "$OUT" "near-miss: only malformed reported"
+# same trigger in quick.md
+R9="$(new_repo)"
+mkquick "$R9" q
+printf -- '  - [X] T-5 (AC-1): near miss\n' >> "$R9/specs/q/quick.md"
+run_check "$R9" specs q
+assert_eq "specs/q/quick.md: malformed task line '  - [X] T-5 (AC-1): near miss'" "$OUT" "near-miss in quick.md"
+assert_eq "1" "$RC" "near-miss in quick.md: rc 1"
+# task-like lines in other files (requirements.md, plan.md) are not task lines
+R9="$(new_repo)"
+mkfeat "$R9" x
+printf -- '- [X] T-5 (nope): in plan\n' >> "$R9/specs/x/plan.md"
+run_check "$R9" specs x
+assert_eq "" "$OUT" "task-like line outside tasks.md/quick.md ignored"
 # well-formed lines, incl. two ACs and a ticked task
 { cat "$TPL/tasks.md"; printf -- '- [x] T-2 (AC-1, AC-2): two cites\n'; } > "$T"
 printf -- '- AC-2: second\n' >> "$R/specs/x/requirements.md"
@@ -520,11 +559,28 @@ git -C "$R" checkout -q -b feature/ghost
 run_check "$R" specs
 assert_eq "specs/ghost: not found" "$OUT" "branch id without a directory: not found"
 assert_eq "1" "$RC" "branch not found: rc 1"
-# a feature dir without any checked file is clean
+# a feature dir without state.md is a violation; other files stay optional
 mkdir -p "$R/specs/empty"
 run_check "$R" specs empty
-assert_eq "" "$OUT" "empty feature dir: nothing to check"
-assert_eq "0" "$RC" "empty feature dir: rc 0"
+assert_eq "specs/empty/state.md: not found" "$OUT" "feature dir without state.md"
+assert_eq "1" "$RC" "no state.md: rc 1"
+mkdir -p "$R/specs/onlyplan"
+cp "$TPL/plan.md" "$R/specs/onlyplan/plan.md"
+run_check "$R" specs onlyplan
+assert_eq "specs/onlyplan/state.md: not found" "$OUT" "only plan.md: just the state.md violation"
+grep -v '^## Risks' "$TPL/plan.md" > "$R/specs/onlyplan/plan.md"
+run_check "$R" specs onlyplan
+assert_eq "specs/onlyplan/state.md: not found
+specs/onlyplan/plan.md: missing heading '## Risks'" "$OUT" "only plan.md: state.md first, then plan.md violations"
+git -C "$R" checkout -q main
+run_check "$R" specs
+assert_eq "specs/empty/state.md: not found
+specs/onlyplan/state.md: not found
+specs/onlyplan/plan.md: missing heading '## Risks'" "$OUT" "all-dirs: missing state.md only for the offending dirs"
+# state.md that is a directory counts as not found
+mkdir -p "$R/specs/dirstate/state.md"
+run_check "$R" specs dirstate
+assert_eq "specs/dirstate/state.md: not found" "$OUT" "state.md not a regular file"
 
 # no specs/ dir at all
 R="$(new_repo)"
@@ -576,11 +632,25 @@ cp "$TPL"/*.md "$CUSTOM/"
 printf '## Custom heading\n' >> "$CUSTOM/plan.md"
 RX_TEMPLATES="$CUSTOM" run_check "$R" specs x
 assert_eq "specs/x/plan.md: missing heading '## Custom heading'" "$OUT" "RX_TEMPLATES wins over the copy layout"
-# RX_TEMPLATES lacking one template falls through to the next location
+# lookup is per directory: RX_TEMPLATES (an existing dir) lacking one template does NOT fall through
 rm -f "$CUSTOM/plan.md"
 cp "$TPL/plan.md" "$R/.rx/scripts/templates/plan.md"
 RX_TEMPLATES="$CUSTOM" run_check "$R" specs x
-assert_eq "" "$OUT$ERR" "RX_TEMPLATES missing a template falls through"
+assert_eq "rx-check: rx-spec templates not found" "$ERR" "RX_TEMPLATES dir missing a template: no fallback, message"
+assert_eq "" "$OUT" "RX_TEMPLATES dir missing a template: stdout empty"
+assert_eq "2" "$RC" "RX_TEMPLATES dir missing a template: rc 2"
+# the chosen dir is used even when it is incomplete for files that are not present
+rm -f "$R/specs/x/review.md" "$R/specs/x/tasks.md" "$R/specs/x/requirements.md"
+rm -f "$CUSTOM/review.md" "$CUSTOM/tasks.md" "$CUSTOM/requirements.md"
+cp "$TPL/plan.md" "$CUSTOM/plan.md"
+RX_TEMPLATES="$CUSTOM" run_check "$R" specs x
+assert_eq "" "$OUT$ERR" "RX_TEMPLATES dir only needs the templates of present files"
+# empty RX_TEMPLATES is ignored
+RX_TEMPLATES="" run_check "$R" specs x
+assert_eq "" "$OUT$ERR" "empty RX_TEMPLATES ignored"
+# RX_TEMPLATES set to a nonexistent dir is skipped (first EXISTING dir wins)
+RX_TEMPLATES="$R/nodir" run_check "$R" specs x
+assert_eq "" "$OUT$ERR" "RX_TEMPLATES nonexistent dir skipped"
 
 # repo layout via RX_TEMPLATES when the script has no templates beside it
 R2="$(new_repo)"
@@ -611,6 +681,57 @@ cp "$ROOT"/scripts/*.sh "$R3/.rx/scripts/"
 run_script "$R3/.rx/scripts/rx-check.sh" "$R3" specs
 assert_eq "" "$OUT$ERR" "no features: templates not needed"
 assert_eq "0" "$RC" "no features: rc 0"
+
+# ---------- locale: the gate is byte-oriented (run under a UTF-8 locale on purpose) ----------
+UTF="en_US.UTF-8"
+R="$(new_repo)"
+mkfeat "$R" x
+T="$R/specs/x/tasks.md"
+{ cat "$TPL/tasks.md"; printf 'caf\351\n'; } > "$T"
+pad_to "$T" 41
+LC_ALL="$UTF" LANG="$UTF" run_check "$R" specs x
+assert_eq "specs/x/tasks.md: 41 lines exceeds cap 40" "$OUT" "invalid byte + cap+1: cap violation under UTF-8"
+assert_eq "1" "$RC" "invalid byte + cap+1: rc 1"
+assert_eq "" "$ERR" "invalid byte: no tr/sed errors on stderr"
+pad_to "$T" 40
+{ cat "$TPL/tasks.md"; printf 'caf\351\n'; } > "$T"
+pad_to "$T" 40
+LC_ALL="$UTF" LANG="$UTF" run_check "$R" specs x
+assert_eq "" "$OUT$ERR" "invalid byte, exactly at cap: clean under UTF-8"
+# invalid byte before the first required heading: no false missing heading
+printf -- '---\nstatus: draft\n---\ncaf\351\n# Tasks\n## Tasks\n' > "$T"
+LC_ALL="$UTF" LANG="$UTF" run_check "$R" specs x
+assert_eq "" "$OUT$ERR" "invalid byte before heading: no false missing heading"
+assert_eq "0" "$RC" "invalid byte before heading: rc 0"
+# a well-formed task line with a Latin-1 byte is not malformed
+{ cat "$TPL/tasks.md"; printf -- '- [ ] T-2 (AC-1): caf\351 au lait\n'; } > "$T"
+LC_ALL="$UTF" LANG="$UTF" run_check "$R" specs x
+assert_eq "" "$OUT$ERR" "Latin-1 byte in task description: not malformed"
+assert_eq "0" "$RC" "Latin-1 task description: rc 0"
+# UTF-8 text (valid multibyte) is fine too
+{ cat "$TPL/tasks.md"; printf -- '- [ ] T-2 (AC-1): caf\303\251\n'; } > "$T"
+LC_ALL="$UTF" LANG="$UTF" run_check "$R" specs x
+assert_eq "" "$OUT$ERR" "valid UTF-8 in task description"
+
+# ---------- missing lib ----------
+R="$(new_repo)"
+mkfeat "$R" x
+grep -v '^## Risks' "$R/specs/x/plan.md" > "$R/specs/x/plan.md.new" && mv "$R/specs/x/plan.md.new" "$R/specs/x/plan.md"
+LONE="$(fixture_tmpdir)"
+cp "$CHECK" "$LONE/rx-check.sh"
+run_script "$LONE/rx-check.sh" "$R" specs
+assert_eq "rx-check: rx-lib.sh not found" "$ERR" "missing lib, no id: message"
+assert_eq "" "$OUT" "missing lib, no id: stdout empty"
+assert_eq "2" "$RC" "missing lib, no id: rc 2"
+run_script "$LONE/rx-check.sh" "$R" specs x
+assert_eq "rx-check: rx-lib.sh not found" "$ERR" "missing lib, with id: message"
+assert_eq "" "$OUT" "missing lib, with id: stdout empty"
+assert_eq "2" "$RC" "missing lib, with id: rc 2"
+# an unreadable/failing lib also exits 2
+printf 'return 1\n' > "$LONE/rx-lib.sh"
+run_script "$LONE/rx-check.sh" "$R" specs x
+assert_eq "2" "$RC" "lib that fails to source: rc 2"
+assert_eq "" "$OUT" "lib that fails to source: stdout empty"
 
 [ "$RX_FAILS" -eq 0 ] && echo "test_check_specs: ok"
 exit 0

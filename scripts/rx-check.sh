@@ -12,7 +12,13 @@
 # dispatcher at the bottom.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-. "$SCRIPT_DIR/rx-lib.sh"
+if [ ! -f "$SCRIPT_DIR/rx-lib.sh" ] || ! . "$SCRIPT_DIR/rx-lib.sh"; then
+  printf 'rx-check: rx-lib.sh not found\n' >&2
+  exit 2
+fi
+# The checks are byte-oriented: under a UTF-8 locale BSD tr/sed abort at the first
+# invalid byte and bash =~ fails on it, which would turn into false passes/fails.
+export LC_ALL=C
 rx_noop_unless_enabled
 
 _chk_usage() {
@@ -46,24 +52,32 @@ _chk_cap() {
 }
 
 # _chk_tpl_find <file>: set TPL_PATH to the template for spec file <file> and return 0,
-# or return 1 when there is none in any location. Lookup order: $RX_TEMPLATES,
-# <script-dir>/../skills/rx-spec/templates, <script-dir>/templates (.rx/scripts copy).
-# review.qa.md and review.security.md have no template: that is not an error
+# or return 1 when it cannot be found. The template DIRECTORY is the first candidate
+# that exists, in order: $RX_TEMPLATES (if set), <script-dir>/../skills/rx-spec/templates,
+# <script-dir>/templates (.rx/scripts copy). Only that directory is used: a template
+# missing from it is "not found" (no per-file fallback, so a broken override cannot be
+# masked). review.qa.md and review.security.md have no template: that is not an error
 # (TPL_PATH stays empty, return 0).
+TPL_DIR=""
 _chk_tpl_find() {
   local dir
   TPL_PATH=""
   case "$1" in
     review.qa.md|review.security.md) return 0 ;;
   esac
-  for dir in "${RX_TEMPLATES-}" "$SCRIPT_DIR/../skills/rx-spec/templates" "$SCRIPT_DIR/templates"; do
-    [ -n "$dir" ] || continue
-    if [ -f "$dir/$1" ]; then
-      TPL_PATH="$dir/$1"
-      return 0
-    fi
-  done
-  return 1
+  if [ -z "$TPL_DIR" ]; then
+    for dir in "${RX_TEMPLATES-}" "$SCRIPT_DIR/../skills/rx-spec/templates" "$SCRIPT_DIR/templates"; do
+      [ -n "$dir" ] || continue
+      if [ -d "$dir" ]; then
+        TPL_DIR="$dir"
+        break
+      fi
+    done
+  fi
+  [ -n "$TPL_DIR" ] || return 1
+  [ -f "$TPL_DIR/$1" ] || return 1
+  TPL_PATH="$TPL_DIR/$1"
+  return 0
 }
 
 # _chk_v <file> <reason>: record a violation line for the current feature.
@@ -94,6 +108,7 @@ _chk_ids() {
 _chk_one_file() {
   local f="$1" path="$CUR_DIR/$1" cap n fm st msg heads h line id cites a rest
   local task_re='^- \[[ x]\] T-[0-9]+ \(AC-[0-9]+(, AC-[0-9]+)*\): .+'
+  local trig_re='^[[:space:]]*[-*+][[:space:]]+\[[^]]*\][[:space:]]*T-'
 
   # line cap: CR stripped, an unterminated last line counts (awk NR does both)
   cap="$(_chk_cap "$f")"
@@ -171,30 +186,32 @@ _chk_one_file() {
           esac
         fi
         ;;
-      "- [ ] T-"*|"- [x] T-"*)
-        case "$f" in
-          tasks.md|quick.md)
-            if [[ $line =~ $task_re ]]; then
-              rest="${line#*T-}"
-              id="T-${rest%% *}"
-              case "$SEEN_T" in
-                *"|$id|"*) _chk_v "$f" "duplicate $id" ;;
-                *) SEEN_T="${SEEN_T}|${id}|" ;;
+    esac
+    # task lines (tasks.md, quick.md): the trigger is wide so near misses cannot hide,
+    # the format is strict; only well-formed lines take part in the id checks
+    case "$f" in
+      tasks.md|quick.md)
+        if [[ $line =~ $trig_re ]]; then
+          if [[ $line =~ $task_re ]]; then
+            rest="${line#*T-}"
+            id="T-${rest%% *}"
+            case "$SEEN_T" in
+              *"|$id|"*) _chk_v "$f" "duplicate $id" ;;
+              *) SEEN_T="${SEEN_T}|${id}|" ;;
+            esac
+            cites="${line#*\(}"
+            cites="${cites%%\)*}"
+            cites="${cites//,/ }"
+            for a in $cites; do
+              case "$ALL_AC" in
+                *"|$a|"*) ;;
+                *) _chk_v "$f" "$id cites unknown $a" ;;
               esac
-              cites="${line#*\(}"
-              cites="${cites%%\)*}"
-              cites="${cites//,/ }"
-              for a in $cites; do
-                case "$ALL_AC" in
-                  *"|$a|"*) ;;
-                  *) _chk_v "$f" "$id cites unknown $a" ;;
-                esac
-              done
-            else
-              _chk_v "$f" "malformed task line '${line:0:40}'"
-            fi
-            ;;
-        esac
+            done
+          else
+            _chk_v "$f" "malformed task line '${line:0:40}'"
+          fi
+        fi
         ;;
     esac
   done < "$path"
@@ -213,6 +230,7 @@ _chk_feature() {
     VIOL="${VIOL}specs/${CUR_ID}: invalid feature id"$'\n'
     return 0
   fi
+  [ -f "$CUR_DIR/state.md" ] || _chk_v "state.md" "not found"
   SEEN_AC=""
   SEEN_R=""
   SEEN_T=""
