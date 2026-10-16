@@ -379,8 +379,8 @@ rx_run_timeout() {
 }
 
 # _rx_rt_abort <signal> <pid> <watcher-pid>: INT/TERM/HUP/QUIT handler of rx_run_timeout. Kills
-# both process groups, puts the caller's traps back (it reads old_int/old_term from
-# the running rx_run_timeout frame: old_int, old_term, old_hup, old_quit) and re-raises the signal on the shell.
+# both process groups, puts the caller's traps back (it reads old_int, old_term, old_hup and
+# old_quit from the running rx_run_timeout frame) and re-raises the signal on the shell.
 _rx_rt_abort() {
   kill -KILL -- "-$2" "-$3" 2>/dev/null
   trap - INT TERM HUP QUIT

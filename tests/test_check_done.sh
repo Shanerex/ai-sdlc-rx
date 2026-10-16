@@ -338,6 +338,17 @@ R="$(fresh)"
 rm "$R/specs/x/review.md"
 run_check "$R" done
 fail_case "full lane without review.md" "specs/x/review.md: required for full lane"
+# a lane file must be a regular file: a directory or a /dev/null symlink must not satisfy "required"
+R="$(fresh)"
+rm "$R/specs/x/tasks.md"
+mkdir "$R/specs/x/tasks.md"
+run_check "$R" done
+fail_case "tasks.md is a directory" "specs/x/tasks.md: must be a regular file"
+R="$(fresh)"
+rm "$R/specs/x/tasks.md"
+ln -s /dev/null "$R/specs/x/tasks.md"
+run_check "$R" done
+fail_case "tasks.md is a /dev/null symlink" "specs/x/tasks.md: must be a regular file"
 R="$(fresh)"
 rm "$R/specs/x/requirements.md" "$R/specs/x/plan.md" "$R/specs/x/review.md"
 run_check "$R" done

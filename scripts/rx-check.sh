@@ -626,7 +626,11 @@ _chk_done_lanes() {
     required="state.md requirements.md plan.md tasks.md review.md"
   fi
   for f in $required; do
-    [ -e "$d/$f" ] || _chk_dv "specs/${id}/${f}: required for ${DN_LANE} lane"
+    if [ ! -e "$d/$f" ]; then
+      _chk_dv "specs/${id}/${f}: required for ${DN_LANE} lane"
+    elif [ ! -f "$d/$f" ]; then
+      _chk_dv "specs/${id}/${f}: must be a regular file"
+    fi
   done
   for f in requirements.md plan.md tasks.md review.md quick.md; do
     [ -f "$d/$f" ] || continue

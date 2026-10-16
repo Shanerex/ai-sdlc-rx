@@ -71,7 +71,7 @@ State protocol:
 
 - `docs/knowledge/decisions/<YYYY-MM-DD>-<slug>.md`: at most 6 lines.
 - `docs/knowledge/learnings/<YYYY-MM-DD>-<slug>.md`: at most 5 lines.
-- One entry per file: plain text, first line `tags: [a, b]` (bare, no `---` fences), then the body. The cap counts the whole file, tags line included.
+- One entry per file (a regular file, never a symlink or directory): plain text, first line `tags: [a, b]` (bare, no `---` fences), then the body. The cap counts the whole file, tags line included.
 - Entries are grepped by tag, never bulk-read.
 
 ## Token rules
