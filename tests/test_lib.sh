@@ -630,8 +630,9 @@ after="$(bash -c ". '$LIB'; set +o" 2>&1)"
 assert_eq "$before" "$after" "sourcing leaves set -o options unchanged"
 after_i="$(bash -c 'IFS=:; cd /; p=$PWD; . "'"$LIB"'"; [ "$IFS" = ":" ] && [ "$PWD" = "$p" ] && echo same' 2>&1)"
 assert_eq "same" "$after_i" "sourcing leaves IFS and cwd alone"
-trap_out="$(bash -c 'trap "echo T" INT; trap "echo E" EXIT; . "'"$LIB"'"; trap -p' 2>&1)"
-assert_contains "$trap_out" "echo T" "sourcing keeps caller INT trap"
+# USR1, not INT: a shell started in the background ignores INT from the start and refuses the trap
+trap_out="$(bash -c 'trap "echo T" USR1; trap "echo E" EXIT; . "'"$LIB"'"; trap -p' 2>&1)"
+assert_contains "$trap_out" "echo T" "sourcing keeps caller signal trap"
 assert_contains "$trap_out" "echo E" "sourcing keeps caller EXIT trap"
 names="$(bash -c '
   compgen -A function | sort > "'"$H"'/pre_f"; compgen -v | sort > "'"$H"'/pre_v"
