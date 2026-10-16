@@ -26,4 +26,21 @@ needs() {
 }
 needs feature 40 '${CLAUDE_PLUGIN_ROOT}/scripts/rx-new-feature.sh' '--quick' '/rx:init' 'why' 'who' 'done-when' 'state.md' '/rx:next'
 needs status 12 '!`${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh' 'allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh' 'verbatim' '/rx:init'
+# /rx:next: table-driven dispatch. Every (lane, phase) a feature can be in has one table row.
+N="$CM/next.md"
+needs next 110 '!`${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh' 'rx:pm' 'rx:architect' 'rx:dev' 'rx:qa' 'rx:security' 'SendMessage' \
+  'review.qa.md' 'review.security.md' 'review.md' 'explicit' 'quick.md' 'rx-check.sh done' 'git config user.name' 'AskUserQuestion'
+for row in "full intake" "full requirements" "full plan" "full build" "full verify" "full close" "full done" \
+           "quick plan" "quick build" "quick verify" "quick close" "quick done"; do
+  grep -q "^| $row |" "$N" || _rx_fail "next.md: dispatch table has no row '| $row |'"
+done
+# gates are written only after a human yes, by the orchestrator (this command), in the documented form
+grep -q 'approved:<approver>:<YYYY-MM-DD>' "$N" || _rx_fail "next.md: gate value format"
+# close calls done only (done already runs specs and shared)
+grep -q 'rx-check.sh shared' "$N" && _rx_fail "next.md: close must call rx-check.sh done only"
+grep -q 'rx-check.sh specs' "$N" && _rx_fail "next.md: close must call rx-check.sh done only"
+# fallback when SendMessage resume is unavailable
+grep -qi 'unavailable' "$N" || _rx_fail "next.md: SendMessage fallback"
+# auto fix loops capped at 2
+grep -q 'at most 2' "$N" || _rx_fail "next.md: fix loops capped at 2"
 echo "test_commands: ok"
