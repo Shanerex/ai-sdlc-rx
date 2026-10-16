@@ -306,6 +306,58 @@ rx_state_valid() {
   return 0
 }
 
+# _rx_glob_re <glob>: print an anchored ERE for one source_globs entry.
+#   `**/` zero or more directories, `**` anything (including `/`), `*` anything but `/`,
+#   `?` one char but `/`. Everything else is literal (no braces, no [classes]).
+_rx_glob_re() {
+  local g="${1-}" re="^" c
+  while [ -n "$g" ]; do
+    case "$g" in
+      '**/'*) re="${re}(.*/)?"; g="${g#'**/'}"; continue ;;
+      '**'*) re="${re}.*"; g="${g#'**'}"; continue ;;
+    esac
+    c="${g:0:1}"
+    g="${g:1}"
+    case "$c" in
+      '*') re="${re}[^/]*" ;;
+      '?') re="${re}[^/]" ;;
+      '^') re="${re}\\^" ;;
+      '.'|'+'|'('|')'|'['|'{'|'}'|'|'|'$'|'\') re="${re}[${c}]" ;;
+      ']') re="${re}[]]" ;;
+      *) re="${re}${c}" ;;
+    esac
+  done
+  printf '%s$\n' "$re"
+}
+
+# rx_glob_match <repo-relative-path>: return 0 iff the path matches any entry of the
+# `source_globs` config key, else 1 (also when the key is empty or missing, so an
+# unconfigured repo blocks nothing). Format: comma-separated entries, each trimmed;
+# a leading `./` is ignored on both sides. `**/` = any directories (or none), `**` = any
+# characters including `/`, `*` and `?` never cross `/`; nothing else is special. bash 3.2
+# has no globstar, so entries are translated to EREs by _rx_glob_re.
+rx_glob_match() {
+  local path="${1-}" globs entry re rest
+  path="${path#./}"
+  globs="$(rx_cfg source_globs)"
+  [ -n "$globs" ] || return 1
+  rest="$globs"
+  while [ -n "$rest" ]; do
+    case "$rest" in
+      *,*) entry="${rest%%,*}"; rest="${rest#*,}" ;;
+      *) entry="$rest"; rest="" ;;
+    esac
+    entry="$(_rx_trim "$entry")"
+    entry="${entry#./}"
+    [ -n "$entry" ] || continue
+    re="$(_rx_glob_re "$entry")"
+    if [[ $path =~ $re ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # rx_run_timeout <seconds> <outfile> <command-string>: run <command-string> with
 # `bash -c` from the CURRENT directory, stdin from /dev/null, stdout+stderr combined
 # into <outfile> (truncated first). Returns the command's exit status, or 124 when it
