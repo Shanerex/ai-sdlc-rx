@@ -3,9 +3,10 @@
 # No LLM, no network. Used by /rx:next, pre-commit and CI.
 #   specs [feature-id]  spec-file hygiene: line caps, required headings, frontmatter,
 #                       ID uniqueness, task line format, tasks cite existing ACs
-#   shared [feature-id] merge-safety: a feature branch (base_branch...HEAD, plus staged,
-#                       unstaged and untracked changes) may only touch code, its own
-#                       specs/<id>/ and NEW files under docs/knowledge/{decisions,learnings}/
+#   shared [feature-id] merge-safety: a feature branch (net change since the merge base
+#                       with base_branch, working tree and untracked files included) may
+#                       only touch code, its own specs/<id>/ and NEW files under
+#                       docs/knowledge/{decisions,learnings}/
 #   done                (not implemented yet)
 # Exit codes: 0 clean, 1 violations (one `<path>: <reason>` line each on stdout),
 # 2 usage or install error (message on stderr).
@@ -317,9 +318,9 @@ _chk_sv() {
 # path, if it breaks a rule. First matching rule wins. Matching of the protected NAMES
 # is case-insensitive (a branch must not slip CLAUDE.md past the gate as claude.md); the
 # exceptions (.rx/local/, own specs dir, new knowledge entries) need the exact case.
-# Uses SH_ID, SH_ROOT, SH_REF and SH_VF (lowercased version_file, may be empty).
+# Uses SH_ID and SH_VF (lowercased version_file, may be empty).
 _chk_shared_rule() {
-  local p="$2" lp="$3" rest name
+  local st="$1" p="$2" lp="$3" rest name
   case "$lp" in
     claude.md|agents.md|docs/knowledge/architecture.md)
       _chk_sv "$p" "shared file modified"
@@ -343,19 +344,15 @@ _chk_shared_rule() {
   fi
   case "$lp" in
     docs/knowledge|docs/knowledge/*)
-      # Allowed: a file docs/knowledge/{decisions,learnings}/<name>.md (single level) that
-      # the base does not have. Judged against the base tree, not by the status letter, so
-      # a new entry that is edited again before the next commit (A then M) stays new, while
-      # an existing entry never passes whatever happened to it.
+      # Allowed: a NEW file (status A against the merge base) docs/knowledge/
+      # {decisions,learnings}/<name>.md, single level.
       case "$p" in
         docs/knowledge/decisions/*.md|docs/knowledge/learnings/*.md)
           name="${p#docs/knowledge/*/}"
           case "$name" in
             */*|.md) ;;
             *)
-              if ! git -C "$SH_ROOT" cat-file -e "$SH_REF:$p" 2>/dev/null; then
-                return 0
-              fi
+              [ "$st" = "A" ] && return 0
               ;;
           esac
           ;;
@@ -388,7 +385,7 @@ _chk_shared_rule() {
 
 # _chk_shared [feature-id]
 _chk_shared() {
-  local id base ref cur tmp st p lp i n key vf
+  local id base ref cur mb st p lp i n key vf tmp
   if [ "$#" -gt 1 ]; then
     _chk_usage
   fi
@@ -417,42 +414,55 @@ _chk_shared() {
   fi
   SH_ID="$id"
 
-  # base ref: the local branch, else origin/<base>; never diff against nothing
-  if git -C "$SH_ROOT" rev-parse --verify -q "refs/heads/$base^{commit}" >/dev/null 2>&1; then
-    ref="refs/heads/$base"
-  elif git -C "$SH_ROOT" rev-parse --verify -q "refs/remotes/origin/$base^{commit}" >/dev/null 2>&1; then
-    ref="refs/remotes/origin/$base"
+  # base ref: the local branch and/or origin/<base>. When both exist, origin/<base> wins
+  # only if the local branch is an ancestor of it (a stale local base); otherwise the
+  # local branch is used. Never diff against nothing.
+  local lref="refs/heads/$base" oref="refs/remotes/origin/$base" have_l=0 have_o=0
+  git -C "$SH_ROOT" rev-parse --verify -q "$lref^{commit}" >/dev/null 2>&1 && have_l=1
+  git -C "$SH_ROOT" rev-parse --verify -q "$oref^{commit}" >/dev/null 2>&1 && have_o=1
+  if [ "$have_l" -eq 1 ] && [ "$have_o" -eq 1 ]; then
+    if git -C "$SH_ROOT" merge-base --is-ancestor "$lref" "$oref" 2>/dev/null; then
+      ref="$oref"
+    else
+      ref="$lref"
+    fi
+  elif [ "$have_l" -eq 1 ]; then
+    ref="$lref"
+  elif [ "$have_o" -eq 1 ]; then
+    ref="$oref"
   else
     printf "rx-check: base branch '%s' not found\n" "$base" >&2
     exit 2
   fi
-  SH_REF="$ref"
 
   vf="$(rx_cfg version_file)"
   vf="${vf#./}"
   SH_VF="$(printf '%s' "$vf" | tr 'A-Z' 'a-z')"
 
-  # change set: NUL-delimited <status> <path> records from three sources
-  tmp="$(mktemp -d "${TMPDIR:-/tmp}/rx-shared.XXXXXX")" || {
+  # change set: NUL-delimited <status> <path> records. The NET change since the merge
+  # base (merge-base tree vs the working tree: committed + staged + unstaged), plus
+  # untracked non-ignored files as additions. A violation that was reverted or fixed
+  # (committed or staged) is net-zero and passes.
+  # SH_TMP is global: the EXIT trap runs after this function has returned.
+  SH_TMP="$(mktemp -d "${TMPDIR:-/tmp}/rx-shared.XXXXXX")" || {
     printf 'rx-check: cannot create a temp dir\n' >&2
     exit 2
   }
-  trap 'rm -rf "$tmp"' EXIT
-  if ! git -C "$SH_ROOT" diff -z --name-status --no-renames --ignore-submodules=none \
-    "$ref...HEAD" -- > "$tmp/committed" 2>"$tmp/err"; then
-    printf 'rx-check: cannot diff against base branch '"'"'%s'"'"': %s\n' "$base" "$(cat "$tmp/err")" >&2
+  tmp="$SH_TMP"
+  trap 'rm -rf "$SH_TMP"' EXIT
+  if ! mb="$(git -C "$SH_ROOT" merge-base "$ref" HEAD 2>/dev/null)" || [ -z "$mb" ]; then
+    printf "rx-check: cannot diff against base branch '%s': no merge base with HEAD\n" "$base" >&2
     exit 2
   fi
   if ! git -C "$SH_ROOT" diff -z --name-status --no-renames --ignore-submodules=none \
-    HEAD -- > "$tmp/worktree" 2>"$tmp/err"; then
-    printf 'rx-check: cannot diff the working tree: %s\n' "$(cat "$tmp/err")" >&2
+    "$mb" -- > "$tmp/all" 2>"$tmp/err"; then
+    printf "rx-check: cannot diff against base branch '%s': %s\n" "$base" "$(cat "$tmp/err")" >&2
     exit 2
   fi
   if ! git -C "$SH_ROOT" ls-files -z --others --exclude-standard > "$tmp/untracked" 2>"$tmp/err"; then
     printf 'rx-check: cannot list untracked files: %s\n' "$(cat "$tmp/err")" >&2
     exit 2
   fi
-  cat "$tmp/committed" "$tmp/worktree" > "$tmp/all"
   while IFS= read -r -d '' p; do
     printf 'A\0%s\0' "$p" >> "$tmp/all"
   done < "$tmp/untracked"

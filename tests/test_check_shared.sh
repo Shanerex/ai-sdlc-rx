@@ -56,12 +56,14 @@ ci() { git -C "$1" add -A && git -C "$1" commit -q -m c; }
 append() { printf 'more\n' >> "$1/$2"; }
 # newfile <repo> <path>: create a file (and its directory).
 newfile() { mkdir -p "$(dirname "$1/$2")" && printf 'new\n' > "$1/$2"; }
-# idx_commit <repo> <path>: commit a file straight into the index (path need not exist on disk).
+# idx_commit <repo> <path>: commit a file straight into the index (it never exists on disk).
 idx_commit() {
   local h
   h="$(printf 'x\n' | git -C "$1" hash-object -w --stdin)"
   git -C "$1" update-index --add --cacheinfo "100644,$h,$2"
   git -C "$1" commit -q -m c
+  # not on disk: skip-worktree makes git diff use the index entry instead of the missing file
+  git -C "$1" update-index --skip-worktree "$2"
 }
 
 # pass_case <label>: the last run was clean.
@@ -378,11 +380,40 @@ git -C "$R" checkout -q main -- CLAUDE.md; ci "$R"
 run_check "$R" shared
 pass_case "violation committed then reverted before HEAD (net-zero)"
 
+# the gate judges the NET change since the merge base: a corrective commit must not be blocked
 R="$(fresh)"; feat "$R"
 append "$R" CLAUDE.md; ci "$R"
 git -C "$R" checkout -q main -- CLAUDE.md
 run_check "$R" shared
-fail_case "violation committed, reverted in the working tree only" "CLAUDE.md: $SHARED"
+pass_case "violation committed, reverted (staged) before the corrective commit"
+git -C "$R" reset -q
+run_check "$R" shared
+pass_case "violation committed, reverted (unstaged)"
+R="$(fresh)"; feat "$R"
+append "$R" CLAUDE.md; append "$R" src/a.java; ci "$R"
+git -C "$R" checkout -q main -- CLAUDE.md
+run_check "$R" shared
+pass_case "violation reverted, other code changes remain"
+append "$R" docs/knowledge/architecture.md
+run_check "$R" shared
+fail_case "...and a new violation is still found" "docs/knowledge/architecture.md: $SHARED"
+
+# a new decision committed (A) and edited again (M) is still new against the merge base
+R="$(fresh)"; feat "$R"
+newfile "$R" docs/knowledge/learnings/l2.md; ci "$R"
+append "$R" docs/knowledge/learnings/l2.md; git -C "$R" add -A
+append "$R" docs/knowledge/learnings/l2.md
+run_check "$R" shared
+pass_case "new learning: committed, then staged and unstaged edits"
+
+# base tip deleted a decision after the branch point; the branch edits it: still an edit
+R="$(fresh)"; feat "$R"
+append "$R" docs/knowledge/decisions/d1.md; ci "$R"
+git -C "$R" checkout -q main
+git -C "$R" rm -q docs/knowledge/decisions/d1.md; ci "$R"
+git -C "$R" checkout -q feature/x
+run_check "$R" shared
+fail_case "decision edited on the branch, deleted on the base tip" "docs/knowledge/decisions/d1.md: $KNOW"
 
 # base moved on after the branch point: only the branch's own changes count
 R="$(fresh)"; feat "$R"
@@ -475,6 +506,74 @@ fail_case "origin/main fallback, violation" "AGENTS.md: $SHARED"
 git -C "$R" branch -q main HEAD
 run_check "$R" shared
 pass_case "a local base is used in preference to origin/main"
+
+# with_origin <repo>: bare origin with main pushed.
+with_origin() {
+  local o
+  o="$(fixture_tmpdir)/origin.git"
+  git init -q --bare "$o"
+  git -C "$1" remote add origin "$o"
+  git -C "$1" push -q origin main 2>/dev/null
+  git -C "$1" fetch -q origin
+}
+
+# stale local base: the branch sits on an advanced origin/main (CLAUDE.md changed there)
+R="$(fresh)"; with_origin "$R"
+M0="$(git -C "$R" rev-parse main)"
+append "$R" CLAUDE.md; ci "$R"
+git -C "$R" push -q origin main 2>/dev/null
+git -C "$R" checkout -q -b feature/x origin/main
+git -C "$R" branch -q -f main "$M0"
+append "$R" src/a.java; ci "$R"
+run_check "$R" shared
+pass_case "stale local base, branch on advanced origin/main: origin/main used"
+newfile "$R" docs/knowledge/zzz.md
+run_check "$R" shared
+fail_case "stale local base: violations still found" "docs/knowledge/zzz.md: $KNOW"
+
+# local base ahead of origin/main: local wins
+R="$(fresh)"; with_origin "$R"
+append "$R" CLAUDE.md; ci "$R"
+feat "$R"
+append "$R" src/a.java; ci "$R"
+run_check "$R" shared
+pass_case "local base ahead of origin/main: local used"
+
+# diverged: local wins
+R="$(fresh)"; with_origin "$R"
+append "$R" AGENTS.md; ci "$R"
+git -C "$R" push -q origin main 2>/dev/null
+git -C "$R" reset -q --hard HEAD~1
+append "$R" CLAUDE.md; ci "$R"
+feat "$R"
+append "$R" src/a.java; ci "$R"
+run_check "$R" shared
+pass_case "diverged local and origin/main: local used"
+
+# no merge base with the base branch: error, never a pass
+R="$(fresh)"
+git -C "$R" checkout -q --orphan feature/x
+git -C "$R" commit -q -m orphan
+append "$R" CLAUDE.md
+run_check "$R" shared
+err_case "no merge base" "rx-check: cannot diff against base branch 'main': no merge base with HEAD"
+
+# temp files are removed on every path (clean, violations, error)
+TD="$(fixture_tmpdir)"
+R="$(fresh)"; feat "$R"; append "$R" src/a.java
+TMPDIR="$TD" run_check "$R" shared
+pass_case "temp cleanup: clean run"
+assert_eq "" "$(ls -A "$TD")" "temp cleanup: nothing left after a clean run"
+append "$R" CLAUDE.md
+TMPDIR="$TD" run_check "$R" shared
+fail_case "temp cleanup: violating run" "CLAUDE.md: $SHARED"
+assert_eq "" "$(ls -A "$TD")" "temp cleanup: nothing left after a violating run"
+R="$(fresh)"
+git -C "$R" checkout -q --orphan feature/x
+git -C "$R" commit -q -m orphan
+TMPDIR="$TD" run_check "$R" shared
+assert_eq "2" "$RC" "temp cleanup: error run rc 2"
+assert_eq "" "$(ls -A "$TD")" "temp cleanup: nothing left after an error run"
 
 # not a git repo
 D="$(fixture_tmpdir)"
