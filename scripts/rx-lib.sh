@@ -127,9 +127,9 @@ rx_require_cfg() {
   return 0
 }
 
-# _rx_valid_id <id>: 0 iff id matches ^[A-Za-z0-9][A-Za-z0-9._-]*$ (explicit
+# rx_valid_id <id>: 0 iff id matches ^[A-Za-z0-9][A-Za-z0-9._-]*$ (explicit
 # character lists, so the result does not depend on the locale).
-_rx_valid_id() {
+rx_valid_id() {
   case "${1-}" in
     ''|[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789]*) return 1 ;;
     *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-]*) return 1 ;;
@@ -141,7 +141,7 @@ _rx_valid_id() {
 # branch_pattern (default feature/{id}; one `{id}` placeholder, plain string
 # stripping, never a regex) and return 0. Print nothing and return 1 if the
 # pattern lacks exactly one `{id}`, the branch does not match, or the id is
-# not valid per _rx_valid_id. The configured base_branch is never a feature branch
+# not valid per rx_valid_id. The configured base_branch is never a feature branch
 # (so `branch_pattern: {id}` does not turn `main` into a feature id).
 rx_branch_id() {
   local branch="${1-}" pattern prefix suffix id base
@@ -164,14 +164,37 @@ rx_branch_id() {
   esac
   id="${branch#"$prefix"}"
   id="${id%"$suffix"}"
-  _rx_valid_id "$id" || return 1
+  rx_valid_id "$id" || return 1
   printf '%s\n' "$id"
+  return 0
+}
+
+# rx_id_branch <id>: print the branch name for a feature id under branch_pattern
+# (default feature/{id}) and return 0: the inverse of rx_branch_id. Print nothing and
+# return 1 if the id is invalid, the pattern lacks exactly one `{id}`, or the result is the
+# configured base_branch.
+rx_id_branch() {
+  local id="${1-}" pattern prefix suffix branch
+  rx_valid_id "$id" || return 1
+  pattern="$(rx_cfg branch_pattern 'feature/{id}')"
+  case "$pattern" in
+    *'{id}'*) ;;
+    *) return 1 ;;
+  esac
+  prefix="${pattern%%'{id}'*}"
+  suffix="${pattern#*'{id}'}"
+  case "$suffix" in
+    *'{id}'*) return 1 ;;
+  esac
+  branch="${prefix}${id}${suffix}"
+  [ "$branch" != "$(rx_cfg base_branch)" ] || return 1
+  printf '%s\n' "$branch"
   return 0
 }
 
 # rx_feature_id: print the active feature id and return 0, else print nothing
 # and return 1. Order: (a) current branch via rx_branch_id, (b) first line of
-# <root>/.rx/local/active. Ids must be valid per _rx_valid_id. Detached HEAD,
+# <root>/.rx/local/active. Ids must be valid per rx_valid_id. Detached HEAD,
 # rebase and non-git all fall through to (b).
 rx_feature_id() {
   local branch id root line
@@ -185,7 +208,7 @@ rx_feature_id() {
     IFS= read -r line < "$root/.rx/local/active" || true
     line="${line%$'\r'}"
     id="$(_rx_trim "$line")"
-    if _rx_valid_id "$id"; then
+    if rx_valid_id "$id"; then
       printf '%s\n' "$id"
       return 0
     fi
@@ -236,7 +259,7 @@ EOF
 # 1 with no output if the id, file, frontmatter or key is missing/invalid.
 rx_state_get() {
   local id="${1-}" key="${2-}" file fm
-  _rx_valid_id "$id" || return 1
+  rx_valid_id "$id" || return 1
   [ -n "$key" ] || return 1
   file="$(rx_root)/specs/$id/state.md"
   [ -f "$file" ] || return 1
@@ -249,7 +272,7 @@ rx_state_get() {
 # Otherwise print ONE line `state.md invalid: <reason>` to stderr and return 1.
 rx_state_valid() {
   local id="${1-}" file fm k v rest approver date
-  _rx_valid_id "$id" || { printf 'state.md invalid: not found\n' >&2; return 1; }
+  rx_valid_id "$id" || { printf 'state.md invalid: not found\n' >&2; return 1; }
   file="$(rx_root)/specs/$id/state.md"
   [ -f "$file" ] || { printf 'state.md invalid: not found\n' >&2; return 1; }
   fm="$(_rx_fm "$file")" || { printf 'state.md invalid: no frontmatter\n' >&2; return 1; }
@@ -261,6 +284,10 @@ rx_state_valid() {
     case "$k" in
       feature|next)
         [ -n "$v" ] || { printf 'state.md invalid: empty %s\n' "$k" >&2; return 1; }
+        if [ "$k" = feature ] && [ "$v" != "$id" ]; then
+          printf "state.md invalid: feature '%s' does not match directory '%s'\n" "$v" "$id" >&2
+          return 1
+        fi
         ;;
       phase)
         case "$v" in

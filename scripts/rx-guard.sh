@@ -120,7 +120,7 @@ case "$REL" in
   specs/*/state.md)
     SID="${REL#specs/}"
     SID="${SID%/state.md}"
-    if [ -n "$AGENT" ] && _rx_valid_id "$SID"; then
+    if [ -n "$AGENT" ] && rx_valid_id "$SID"; then
       NEWTEXT="$(_g_jq '[.tool_input.new_string?, .tool_input.content?, (.tool_input.edits[]?.new_string?)] | map(select(type == "string")) | join("\n")')"
       while IFS= read -r line; do
         line="${line%$'\r'}"

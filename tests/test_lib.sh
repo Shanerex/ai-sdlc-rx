@@ -384,6 +384,33 @@ mkdir -p "$S/sub"
 run "$S/sub" rx_state_get f1 phase
 assert_eq "plan" "$OUT" "state_get from a subdirectory"
 
+# ---------- rx_valid_id / rx_id_branch ----------
+for id in a A1 2026-10-16-add-health PROJ-123 a.b_c; do
+  assert_exit 0 inrepo "$ROOT" rx_valid_id "$id"
+done
+for id in "" -a .a _a "a b" "a/b" "a;b" '$x' "../x" 'a*'; do
+  assert_exit 1 inrepo "$ROOT" rx_valid_id "$id"
+done
+IB="$(new_repo)"
+run "$IB" rx_id_branch 2026-10-16-add-health
+assert_eq "feature/2026-10-16-add-health" "$OUT" "rx_id_branch: default pattern"; assert_eq "0" "$RC" "rx_id_branch: rc 0"
+fixture_config "$IB" "branch_pattern=ft/{id}-wip"
+run "$IB" rx_id_branch PROJ-1
+assert_eq "ft/PROJ-1-wip" "$OUT" "rx_id_branch: custom pattern"
+run "$IB" rx_branch_id "$OUT"
+assert_eq "PROJ-1" "$OUT" "rx_id_branch round-trips through rx_branch_id"
+run "$IB" rx_id_branch "a b"
+assert_eq "1" "$RC" "rx_id_branch: invalid id"; assert_eq "" "$OUT" "rx_id_branch: invalid id prints nothing"
+fixture_config "$IB" "branch_pattern=no-placeholder"
+run "$IB" rx_id_branch x
+assert_eq "1" "$RC" "rx_id_branch: pattern without {id}"
+fixture_config "$IB" "branch_pattern={id}/{id}"
+run "$IB" rx_id_branch x
+assert_eq "1" "$RC" "rx_id_branch: pattern with two {id}"
+fixture_config "$IB" "branch_pattern={id}"
+run "$IB" rx_id_branch main
+assert_eq "1" "$RC" "rx_id_branch: never maps an id onto base_branch"
+
 # ---------- rx_state_valid ----------
 V="$(new_repo)"
 mkdir -p "$V/specs/real"
@@ -407,8 +434,8 @@ valid_case() { # <message> <expected-rc> <expected-err-or-empty> <id>
 mkstate ok1 ok1 done approved approved:rex:2026-10-16 approved:a.b-c:2026-01-02 none major "ship it"
 valid_case "all enum values" 0 "" ok1
 for p in intake requirements plan build verify close done; do
-  mkstate p "$p" "$p" draft none none none none n
-  valid_case "phase $p" 0 "" p
+  mkstate "$p" "$p" "$p" draft none none none none n
+  valid_case "phase $p" 0 "" "$p"
 done
 for s in draft awaiting-human approved blocked; do
   mkstate s s intake "$s" none none none none n
@@ -441,29 +468,31 @@ mkdir -p "$V/specs/out"
 printf -- '---\nfeature: o\nphase: plan\nstatus: draft\ng1: none\ng2: none\nbump: none\nnext: n\n---\ng3: none\n' > "$V/specs/out/state.md"
 valid_case "key outside frontmatter" 1 "state.md invalid: missing key g3" out
 
-mkstate bad f foo draft none none none none n
+mkstate bad bad foo draft none none none none n
 valid_case "bad phase" 1 "state.md invalid: unknown phase 'foo'" bad
-mkstate bad f intake Draft none none none none n
+mkstate bad bad intake Draft none none none none n
 valid_case "bad status" 1 "state.md invalid: unknown status 'Draft'" bad
-mkstate bad f intake draft yes none none none n
+mkstate bad bad intake draft yes none none none n
 valid_case "bad g1" 1 "state.md invalid: bad g1 'yes'" bad
-mkstate bad f intake draft none approved:rex none none n
+mkstate bad bad intake draft none approved:rex none none n
 valid_case "gate missing date" 1 "state.md invalid: bad g2 'approved:rex'" bad
-mkstate bad f intake draft none none approved:rex:2026-1-1 none n
+mkstate bad bad intake draft none none approved:rex:2026-1-1 none n
 valid_case "gate bad date" 1 "state.md invalid: bad g3 'approved:rex:2026-1-1'" bad
-mkstate bad f intake draft approved::2026-10-16 none none none n
+mkstate bad bad intake draft approved::2026-10-16 none none none n
 valid_case "gate empty approver" 1 "state.md invalid: bad g1 'approved::2026-10-16'" bad
-mkstate bad f intake draft "approved:rex smith:2026-10-16" none none none n
+mkstate bad bad intake draft "approved:rex smith:2026-10-16" none none none n
 valid_case "gate approver with space" 1 "state.md invalid: bad g1 'approved:rex smith:2026-10-16'" bad
-mkstate bad f intake draft approved:a:b:2026-10-16 none none none n
+mkstate bad bad intake draft approved:a:b:2026-10-16 none none none n
 valid_case "gate approver with colon" 1 "state.md invalid: bad g1 'approved:a:b:2026-10-16'" bad
-mkstate bad f intake draft none none none Major n
+mkstate bad bad intake draft none none none Major n
 valid_case "bad bump" 1 "state.md invalid: unknown bump 'Major'" bad
-mkstate bad f intake draft none none none none ""
+mkstate bad bad intake draft none none none none ""
 valid_case "empty next" 1 "state.md invalid: empty next" bad
 mkstate bad "" intake draft none none none none n
 valid_case "empty feature" 1 "state.md invalid: empty feature" bad
 valid_case "path-like id" 1 "state.md invalid: not found" ../real
+mkstate mis other intake draft none none none none n
+valid_case "feature differs from the directory id" 1 "state.md invalid: feature 'other' does not match directory 'mis'" mis
 # exactly one stderr line
 run "$V" rx_state_valid bad
 assert_eq "1" "$(printf '%s\n' "$ERR" | wc -l | tr -d ' ')" "state_valid prints a single line"

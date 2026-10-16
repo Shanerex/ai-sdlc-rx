@@ -264,7 +264,7 @@ _chk_feature() {
     VIOL="${VIOL}specs/${CUR_ID}: not found"$'\n'
     return 0
   fi
-  if ! _rx_valid_id "$CUR_ID"; then
+  if ! rx_valid_id "$CUR_ID"; then
     VIOL="${VIOL}specs/${CUR_ID}: invalid feature id"$'\n'
     return 0
   fi
@@ -297,7 +297,7 @@ _chk_specs() {
     _chk_usage
   fi
   if [ "$#" -eq 1 ]; then
-    if ! _rx_valid_id "$1"; then
+    if ! rx_valid_id "$1"; then
       printf "rx-check: invalid feature id '%s'\n" "$1" >&2
       exit 2
     fi
@@ -487,7 +487,7 @@ _chk_shared() {
   base="$(rx_require_cfg base_branch)" || exit 2
   _chk_vbump
   if [ "$#" -eq 1 ]; then
-    if ! _rx_valid_id "$1"; then
+    if ! rx_valid_id "$1"; then
       printf "rx-check: invalid feature id '%s'\n" "$1" >&2
       exit 2
     fi
@@ -714,7 +714,7 @@ _chk_done() {
   fi
   CHK_ROOT="$(rx_root)"
   if [ "$#" -eq 1 ]; then
-    if ! _rx_valid_id "$1"; then
+    if ! rx_valid_id "$1"; then
       printf "rx-check: invalid feature id '%s'\n" "$1" >&2
       exit 2
     fi
