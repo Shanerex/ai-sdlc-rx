@@ -6,7 +6,7 @@ description: rx spec contract - file caps, ID rules, state.md protocol, two-pass
 
 Contract for every rx agent and command. Templates live in `templates/` (this dir); load one only when writing that file.
 
-## Caps (lines, whole file incl. frontmatter)
+## Caps (lines, whole file incl. frontmatter or tags line)
 
 | file | cap |
 |---|---|
@@ -45,7 +45,7 @@ Frontmatter keys, in order:
 - `bump`: none|patch|minor|major
 - `next`: one-line next action
 
-Body is `## Log`, one line per event.
+Body is `## Log`, one line per event. Whoever appends near the 30-line cap must collapse older log lines into one summary line; gate facts live in `g1`-`g3`, never delete them.
 
 State protocol:
 - state.md is the single source of truth for phase and gates.
@@ -66,7 +66,7 @@ State protocol:
 
 - `docs/knowledge/decisions/<YYYY-MM-DD>-<slug>.md`: at most 6 lines.
 - `docs/knowledge/learnings/<YYYY-MM-DD>-<slug>.md`: at most 5 lines.
-- One entry per file. Frontmatter carries `tags: [a, b]`.
+- One entry per file: plain text, first line `tags: [a, b]` (bare, no `---` fences), then the body. The cap counts the whole file, tags line included.
 - Entries are grepped by tag, never bulk-read.
 
 ## Token rules

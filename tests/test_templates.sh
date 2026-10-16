@@ -87,6 +87,9 @@ if [ -f "$SKILL" ]; then
   done
   grep -Fq '| decision entry | 6 |' "$SKILL" || assert_eq "decision row" "missing" "SKILL.md cap table"
   grep -Fq '| learning entry | 5 |' "$SKILL" || assert_eq "learning row" "missing" "SKILL.md cap table"
+  grep -Fq 'first line `tags: [a, b]`' "$SKILL" || assert_eq "tags-first-line rule" "missing" "SKILL.md knowledge entry shape"
+  grep -Fq 'cap counts the whole file' "$SKILL" || assert_eq "whole-file cap rule" "missing" "SKILL.md knowledge entry cap"
+  grep -Fq 'collapse older log lines into one summary line' "$SKILL" || assert_eq "log collapse rule" "missing" "SKILL.md log overflow"
   for tok in 'R-' 'AC-' 'T-' UNDERSTANDING OPTIONS ASSUMPTIONS QUESTIONS 'templates/' 'tags:'; do
     grep -Fq -- "$tok" "$SKILL" || assert_eq "$tok" "missing" "SKILL.md mentions $tok"
   done
