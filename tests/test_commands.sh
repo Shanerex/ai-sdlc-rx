@@ -25,4 +25,5 @@ needs() {
   done
 }
 needs feature 40 '${CLAUDE_PLUGIN_ROOT}/scripts/rx-new-feature.sh' '--quick' '/rx:init' 'why' 'who' 'done-when' 'state.md' '/rx:next'
+needs status 12 '!`${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh' 'allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh' 'verbatim' '/rx:init'
 echo "test_commands: ok"
