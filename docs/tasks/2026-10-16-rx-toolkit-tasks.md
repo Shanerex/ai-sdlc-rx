@@ -10,7 +10,7 @@
 
 **Spec:** `docs/plans/2026-10-16-rx-toolkit-plan.md`
 
-**Status:** REVISED after first review (decisions recorded at the bottom). Nothing has been built. This file is the task list. Each task gets expanded into 2–5 minute TDD steps (failing test, run, implement, run, commit) at execution time. See "How to read this" below.
+**Status:** v0.1.0 built on branch `build/rx-phase-1` (Phases 1-4 and 6; Phase 5, Codex, deferred). The checklist at the bottom records the final verification. This file is the task list. Each task gets expanded into 2–5 minute TDD steps (failing test, run, implement, run, commit) at execution time. See "How to read this" below.
 
 ## How to read this
 
@@ -553,3 +553,24 @@ Phase 2 (T9-T16, plus the T8 follow-up) is built on branch `build/rx-phase-1`, t
 - **Spec coverage:** bundle table → T3, T9–T17. Layout → T1–T3, T11, T26 (Codex files deferred with T24). Per-project footprint → T14, T17. Token rules → T3, T12–T13 and measured in T21. Merge-safety → T7, T22. Workflow and gates → T15. Two-pass → T12, T15. Codex → T23–T25 (deferred). Verification list → T19, T22, T27 (Codex and coverage lines skipped).
 - **Placeholders:** none intentionally. Per-step TDD detail is deferred to execution time (stated in "How to read this").
 - **Names:** `rx_cfg`, `rx_feature_id`, `rx_state_get` and `rx_state_valid` are defined in T4 and used in T5, T9, T10, T14. `rx-check.sh <specs|shared|done>` is defined in T6.
+
+## Final verification (v0.1.0, 2026-10-19)
+
+Plan "Verification" section, ticked against evidence. Codex and coverage lines are skipped (deferred by decision).
+
+- [x] Bash tests cover status parsing and branch to feature-id resolution (`test_status.sh`, `test_lib.sh`).
+- [x] The guard blocks before G2 and allows after (`test_guard.sh`, plus the live probe in `tests/dogfood/results-node-ts.md`).
+- [x] The gate-tests skip and block paths (`test_gate_tests.sh`; a red test blocked Stop in the live probe).
+- [x] `rx-check.sh` specs, shared and done, each pass and fail (`test_check_specs.sh`, `test_check_shared.sh`, `test_check_done.sh`).
+- [x] Every script is a no-op without `.rx/config.yml` (`test_noop.sh`).
+- [x] `claude --plugin-dir .` loads and `claude plugin validate .` passes (warning: no author in `plugin.json`).
+- [x] End to end in a scratch repo: `/rx:init`, `/rx:feature add-health-endpoint`, `/rx:next` to done (`tests/dogfood/results-node-ts.md`).
+- [x] An Edit before G2 is blocked; a red test blocks Stop; `/rx:status` is correct; every spec file is within its cap.
+- [x] Human turns at most 7: 6 after init (7 when the PM asks a question), `tests/dogfood/comparison.md`.
+- [x] CLAUDE.md is byte-identical before and after (`shasum`).
+- [x] Multi-dev: two branches each adding a decision and a learning merge with zero non-code conflicts; a CLAUDE.md edit fails `rx-check.sh shared` (`test_multidev.sh`).
+- [ ] Codex (T23-T25): deferred, no Codex access.
+- [ ] Coverage checks: out of scope for v0.1.
+
+Known limits carried into the release: the plan-first hook covers the Edit tools only (a Bash write is caught by pre-commit, and `--no-verify` skips pre-commit, so CI must run the base branch's `rx-check.sh`); the `marketplace add` install route in the README was not executed; the v2 comparison is modeled, not a live run.
+
