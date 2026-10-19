@@ -46,6 +46,9 @@ grep -q '`.rx/scripts/templates/`' "$N" || _rx_fail "next.md: templates must poi
 grep -q 'CLAUDE_PLUGIN_ROOT}/skills' "$N" && _rx_fail "next.md: agents cannot read the plugin dir; use .rx/scripts/templates/"
 # the architect plans against the real code: its spawn prompt carries source_globs
 grep -q 'source_globs' "$N" || _rx_fail "next.md: architect spawn prompt must carry source_globs"
+# a gate yes continues into the next phase in the same turn (measured: 3 extra /rx:next turns per full feature)
+grep -q 'same turn' "$N" || _rx_fail "next.md: a gate yes must continue into the next phase in the same turn"
+grep -q 'human question, gate or blocker' "$N" || _rx_fail "next.md: must say where the chain stops"
 # gates are written only after a human yes, by the orchestrator (this command), in the documented form
 grep -q 'approved:<approver>:<YYYY-MM-DD>' "$N" || _rx_fail "next.md: gate value format"
 # close calls done only (done already runs specs and shared)
