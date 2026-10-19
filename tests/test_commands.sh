@@ -26,6 +26,13 @@ needs() {
 }
 needs feature 40 '${CLAUDE_PLUGIN_ROOT}/scripts/rx-new-feature.sh' '--quick' '/rx:init' 'why' 'who' 'done-when' 'state.md' '/rx:next'
 needs status 12 '!`${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh' 'allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh' 'verbatim' '/rx:init'
+# /rx:init: the script does the deterministic part, the model only writes drafts that go through it
+needs init 50 '!`${CLAUDE_PLUGIN_ROOT}/scripts/rx-init-files.sh' 'allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/rx-init-files.sh' \
+  '--install-config' '--install-claude-md' '--install-architecture' '--refresh-scripts' '.rx/local/draft' \
+  'test_cmd' 'source_globs' 'branch_pattern' 'base_branch' 'no coverage' '60 lines' '80 lines' '@import' 'brownfield' \
+  'rx:feature' 'Do not commit' 'present'
+# the guard blocks agent writes to these, so init must not tell the model to Edit or Write them
+grep -Eq '(Edit|Write)[^.]*(\.rx/config\.yml|CLAUDE\.md|architecture\.md)' "$CM/init.md" && _rx_fail "init.md: must install config/CLAUDE.md/architecture.md through the script, not Edit/Write"
 # /rx:next: table-driven dispatch. Every (lane, phase) a feature can be in has one table row.
 N="$CM/next.md"
 needs next 110 '!`${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh' 'rx:pm' 'rx:architect' 'rx:dev' 'rx:qa' 'rx:security' 'SendMessage' \
