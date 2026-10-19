@@ -122,17 +122,25 @@ exec .rx/scripts/rx-precommit.sh "\$@"
 HOOK
 }
 
-# _in_base_branch: base_branch from the repo's config, else main.
+# _in_branch_ok <name>: a plain branch name only. The name is written into the hook wrapper, so
+# anything the shell would interpret (quotes, spaces, $, ;) must never get there.
+_in_branch_ok() {
+  [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]]
+}
+
+# _in_base_branch: base_branch from the repo's config, else main. Returns 1 for an unsafe name.
 _in_base_branch() {
   local b=""
   [ -f "$TOP/.rx/config.yml" ] && b="$(rx_cfg base_branch)"
-  printf '%s\n' "${b:-main}"
+  b="${b:-main}"
+  _in_branch_ok "$b" || return 1
+  printf '%s\n' "$b"
 }
 
 # _in_install_hook [only-if-managed]: write the wrapper. A hook that is not ours is left alone and
 # the function returns 1; with an argument, an absent or foreign hook is skipped silently.
 _in_install_hook() {
-  local hp
+  local hp base
   hp="$(git rev-parse --git-path hooks/pre-commit 2>/dev/null)" || return 0
   case "$hp" in /*) ;; *) hp="$TOP/$hp" ;; esac
   if [ -e "$hp" ] || [ -L "$hp" ]; then
@@ -144,8 +152,12 @@ _in_install_hook() {
   elif [ -n "${1-}" ]; then
     return 0
   fi
+  base="$(_in_base_branch)" || {
+    printf 'rx-init: base_branch in .rx/config.yml must be a plain branch name (letters, digits, . _ / -); pre-commit hook not installed\n' >&2
+    return 1
+  }
   mkdir -p "$(dirname "$hp")" || return 0
-  _in_hook_text "$(_in_base_branch)" > "$hp.tmp.$$" && chmod +x "$hp.tmp.$$" && mv "$hp.tmp.$$" "$hp"
+  _in_hook_text "$base" > "$hp.tmp.$$" && chmod +x "$hp.tmp.$$" && mv "$hp.tmp.$$" "$hp"
   return 0
 }
 
@@ -191,6 +203,18 @@ _in_config_ok() {
         return 1
         ;;
       test_cmd) [ -n "$val" ] && have_test=1 ;;
+      base_branch)
+        val="${val%%[[:space:]]#*}"
+        val="$(_rx_trim "$val")"
+        case "$val" in
+          \"*\") val="${val#\"}"; val="${val%\"}" ;;
+          \'*\') val="${val#\'}"; val="${val%\'}" ;;
+        esac
+        if ! _in_branch_ok "$val"; then
+          printf 'rx-init: base_branch must be a plain branch name (letters, digits, . _ / -)\n' >&2
+          return 1
+        fi
+        ;;
     esac
   done < "$f"
   if [ "$have_test" -ne 1 ]; then

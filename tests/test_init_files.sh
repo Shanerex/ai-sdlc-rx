@@ -148,6 +148,23 @@ bad_config "empty test_cmd" "test_cmd:"
 run_init "$R" --install-config "$(fixture_tmpdir)/missing"; assert_eq "2" "$RC" "config: missing draft file is a usage error"
 run_init "$R" --install-config; assert_eq "2" "$RC" "config: no draft argument is a usage error"
 
+# base_branch is embedded in the hook wrapper: only plain branch names may get there
+bad_config "base_branch with a quote" $'test_cmd: t\nbase_branch: x\'; touch /tmp/rx-pwned; echo \''
+bad_config "base_branch with a space" $'test_cmd: t\nbase_branch: my branch'
+bad_config "base_branch starting with a dash" $'test_cmd: t\nbase_branch: -x'
+bad_config "base_branch with a dollar" $'test_cmd: t\nbase_branch: $HOME'
+printf 'test_cmd: t\nbase_branch: release/1.x_y-z\n' > "$DRAFT"
+run_init "$R" --install-config "$DRAFT"; assert_eq "0" "$RC" "config: a plain branch name with / . _ - is fine ($ERR)"
+assert_contains "$(cat "$R/.git/hooks/pre-commit")" "BASE='release/1.x_y-z'" "config install re-stamps the managed hook with the base branch"
+R="$(new_repo)"; mkdir -p "$R/.rx"
+printf "test_cmd: t\nbase_branch: x'; touch %s/PWNED; echo '\n" "$(dirname "$R")" > "$R/.rx/config.yml"
+run_init "$R"
+assert_eq "1" "$RC" "init with an unsafe base_branch already in the config: rc 1"
+assert_contains "$ERR" "base_branch" "unsafe base_branch: says which key"
+assert_exit 1 test -e "$R/.git/hooks/pre-commit"
+assert_exit 1 test -e "$(dirname "$R")/PWNED"
+assert_exit 0 test -x "$R/.rx/scripts/rx-check.sh"
+
 # CLAUDE.md
 R="$(new_repo)"; run_init "$R"
 { for i in $(seq 1 60); do echo "line $i"; done; } > "$DRAFT"

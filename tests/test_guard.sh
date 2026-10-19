@@ -161,6 +161,15 @@ R="$(new_repo)"; mkstate "$R" x none
 git -C "$R" checkout -q main; mkdir -p "$R/.rx/local"; printf 'x\n' > "$R/.rx/local/active"
 stage "$R" src/A.java
 run_staged "$R"; allowed "staged: on base branch .rx/local/active is ignored"
+R="$(new_repo)"; mkstate "$R" x none
+mkdir -p "$R/assets"; for i in $(seq 1 1200); do printf '%s\n' "$i" > "$R/assets/f$i.png"; done
+git -C "$R" add assets
+t0=$SECONDS; run_staged "$R"; took=$((SECONDS - t0))
+allowed "staged: many files outside source_globs"
+[ "$took" -le 4 ] || _rx_fail "staged: 1200 non-matching files took ${took}s (cap 4s; one batch glob pass)"
+R="$(new_repo)"; mkstate "$R" x none
+stage "$R" src/Gone.java; rm "$R/src/Gone.java"
+run_staged "$R"; blocked "staged: added file removed from the worktree is still checked"
 R="$(new_repo)"; mkstate "$R" x none; printf 'junk\n' > "$R/specs/x/state.md"
 stage "$R" src/A.java
 run_staged "$R"; allowed "staged: invalid state.md warns, does not block"

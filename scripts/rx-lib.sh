@@ -395,7 +395,8 @@ rx_glob_match_key() {
 # per-file call re-reads the config and forks, about 25 ms a file). Reads NUL-separated
 # repo-relative paths on stdin and prints, one per line and in input order, those that match
 # an entry of ANY named key and are existing regular files (relative to the cwd). The globs
-# are translated once. A path containing a newline is skipped.
+# are translated once. A path containing a newline is skipped. RX_GLOB_NOSTAT=1 skips the file test
+# (staged paths may no longer exist on disk).
 rx_glob_filter() {
   local key globs rest entry res="" re path
   local -a res_list=()
@@ -417,7 +418,7 @@ rx_glob_filter() {
   while IFS= read -r -d '' path; do
     path="${path#./}"
     case "$path" in *$'\n'*) continue ;; esac
-    [ -f "$path" ] || continue
+    [ -n "${RX_GLOB_NOSTAT-}" ] || [ -f "$path" ] || continue
     for re in "${res_list[@]}"; do
       if [[ $path =~ $re ]]; then
         printf '%s\n' "$path"

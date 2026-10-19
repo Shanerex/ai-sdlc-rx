@@ -29,6 +29,17 @@ _g_block() {
 }
 _g_warn() { printf 'rx-guard: warning: %s\n' "$*" >&2; }
 
+# _g_plan_first_paths: NUL-separated paths on stdin, minus the ones plan-first never blocks.
+_g_plan_first_paths() {
+  local path
+  while IFS= read -r -d '' path; do
+    case "$path" in
+      specs/*|docs/*|.rx/*) ;;
+      *) printf '%s\0' "$path" ;;
+    esac
+  done
+}
+
 if [ "${1-}" = "--staged" ]; then
   # Git pre-commit mode: plan-first over the staged paths (deletions included). No stdin.
   cd "$(rx_root)" 2>/dev/null || exit 0
@@ -45,14 +56,12 @@ if [ "${1-}" = "--staged" ]; then
   case "$(rx_state_get "$ID" g2)" in
     approved:*) exit 0 ;;
   esac
-  while IFS= read -r -d '' path; do
-    case "$path" in
-      specs/*|docs/*|.rx/*) continue ;;
-    esac
-    if rx_glob_match "$path"; then
-      _g_block "G2 (plan approval) is not recorded for feature $ID; finish requirements and plan first (/rx:next) before committing $path"
-    fi
-  done < <(git diff --cached --name-only -z --no-renames 2>/dev/null)
+  # One batch glob pass over the staged paths (a per-path rx_glob_match costs about 25 ms a file).
+  hit="$(git diff --cached --name-only -z --no-renames 2>/dev/null | _g_plan_first_paths \
+    | RX_GLOB_NOSTAT=1 rx_glob_filter source_globs | head -n 1)"
+  if [ -n "$hit" ]; then
+    _g_block "G2 (plan approval) is not recorded for feature $ID; finish requirements and plan first (/rx:next) before committing $hit"
+  fi
   exit 0
 fi
 
