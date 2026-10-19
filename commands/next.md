@@ -24,7 +24,7 @@ Pick the row from the `phase:` line (never from `next:`, which is only a hint) a
 | quick done | As full done. |
 
 ## Protocol A: two-pass agent and gate
-1. If the file is missing, or is `status: draft` and you do not have its brief in this conversation, spawn the agent for pass 1. The prompt names pass 1, the intake or input paths, the template path and the output file(s); for the architect also `docs/knowledge/architecture.md` and `docs/knowledge/decisions/`. Set state `status: draft`.
+1. If the file is missing, or is `status: draft` and you do not have its brief in this conversation, spawn the agent for pass 1. The prompt names pass 1, the intake or input paths, the template path and the output file(s); for the architect also `docs/knowledge/architecture.md`, `docs/knowledge/decisions/` and the `source_globs` value from `.rx/config.yml` so the plan fits the existing code. Set state `status: draft`.
 2. Show the BRIEF. If QUESTIONS is not empty, ask all of them in one AskUserQuestion batch (options and defaults from the brief). If it is empty, skip the question turn.
 3. Pass 2: SendMessage the answers to the same agent. If SendMessage is unavailable or the agent is gone, spawn it again with the draft path and the answers. It sets `status: final`.
 4. Set state `status: awaiting-human`, show the change summary and ask for the gate. Only an explicit yes in this conversation counts: write `gN: approved:<approver>:<YYYY-MM-DD>`, advance the phase, set `status: draft` and a one-line `next`. Feedback: back to step 3. Anything else: change nothing.

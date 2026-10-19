@@ -39,7 +39,7 @@ check() {
 }
 
 check pm "Read, Grep, Glob, Write" sonnet "requirements.md" "at most 10 lines"
-check architect "Read, Grep, Glob, Write" opus "plan.md" "tasks.md" "at most 10 lines" "architecture.md"
+check architect "Read, Grep, Glob, Write" opus "plan.md" "tasks.md" "at most 10 lines" "architecture.md" "source_globs"
 check dev ALL sonnet "tasks.md" "status: blocked" "test_cmd"
 check qa "Read, Grep, Glob, Bash, Write" sonnet "review.qa.md"
 check security "Read, Grep, Glob, Bash, Write" opus "review.security.md"
