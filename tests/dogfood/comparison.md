@@ -5,17 +5,17 @@
 Same feature (`add-health-endpoint`, GET `/health`) on node-ts, full lane, three ways. Costs are `total_cost_usd` for the whole
 session (sonnet main thread; architect and security on opus), driver-played human, every gate an explicit yes.
 
-| | before the T19 fixes | T19 run (`results-node-ts.md`) | after chaining (this task) |
-|---|---|---|---|
-| invocations incl. `/rx:init` | n/a | 13 (1 failed, 1 PM question) | 7 (no PM question) |
-| human turns after init | n/a | 11 clean | 6 |
-| session cost | n/a | $1.19 | $1.05 |
-| spec bytes (5 spec files) | n/a | 6797 | 6325 |
+| | T19 run (`results-node-ts.md`) | after chaining (this task) |
+|---|---|---|
+| invocations incl. `/rx:init` | 13 (1 failed, 1 PM question) | 7 (no PM question) |
+| human turns after init | 11 clean | 6 |
+| session cost | $1.19 | $1.05 |
+| spec bytes (5 spec files) | 6797 | 6325 |
 
 After-chaining run, per step:
 
 | # | human turn | cost | delta | agent/model turns | secs |
-|---|---|---|---|---|---|
+|---|---|---|
 | 1 | init | 0.12 | 0.12 | 4 | 19 |
 | 2 | feature | 0.14 | 0.02 | 2 | 9 |
 | 3 | intake | 0.17 | 0.03 | 5 | 18 |
