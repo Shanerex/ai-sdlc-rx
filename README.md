@@ -1,4 +1,4 @@
-# rx
+# Rx AI SDLC
 
 A lean spec-driven feature workflow for Claude Code. A human approves requirements, then the plan, then the result;
 agents do the drafting, building and review in between. Small capped files, one `state.md` per feature, scripts instead
