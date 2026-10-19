@@ -6,7 +6,7 @@ State of the active feature:
 
 !`${CLAUDE_PLUGIN_ROOT}/scripts/rx-status.sh`
 
-Pick the row from the `phase:` line (never from `next:`, which is only a hint) and the lane, do exactly that row, then stop and say what `/rx:next` will do next. No feature shown: tell the human to run `/rx:feature`. The lane is `quick` if `specs/<id>/quick.md` exists, else `full`. Contract: skill rx-spec. Templates: `${CLAUDE_PLUGIN_ROOT}/skills/rx-spec/templates/`.
+Pick the row from the `phase:` line (never from `next:`, which is only a hint) and the lane, do exactly that row, then stop and say what `/rx:next` will do next. No feature shown: tell the human to run `/rx:feature`. The lane is `quick` if `specs/<id>/quick.md` exists, else `full`. Contract: skill rx-spec. Templates: `.rx/scripts/templates/` (the copy made by /rx:init; agents work inside the project and cannot read the plugin dir).
 
 | lane phase | action |
 |---|---|

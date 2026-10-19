@@ -41,6 +41,9 @@ for row in "full intake" "full requirements" "full plan" "full build" "full veri
            "quick plan" "quick build" "quick verify" "quick close" "quick done"; do
   grep -q "^| $row |" "$N" || _rx_fail "next.md: dispatch table has no row '| $row |'"
 done
+# agents run in the project and may not read the plugin dir: templates come from the init copy
+grep -q '`.rx/scripts/templates/`' "$N" || _rx_fail "next.md: templates must point at .rx/scripts/templates/"
+grep -q 'CLAUDE_PLUGIN_ROOT}/skills' "$N" && _rx_fail "next.md: agents cannot read the plugin dir; use .rx/scripts/templates/"
 # gates are written only after a human yes, by the orchestrator (this command), in the documented form
 grep -q 'approved:<approver>:<YYYY-MM-DD>' "$N" || _rx_fail "next.md: gate value format"
 # close calls done only (done already runs specs and shared)
