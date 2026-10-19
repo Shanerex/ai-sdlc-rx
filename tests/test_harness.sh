@@ -48,6 +48,16 @@ assert_contains "$(cat "$d/o/.rx/config.yml")" "base_branch: develop"
 assert_contains "$(cat "$d/o/.rx/config.yml")" "extra_key: 1"
 assert_eq "1" "$(grep -c '^test_cmd:' "$d/o/.rx/config.yml")" "override does not duplicate key"
 
+# --- fixtures ignore the developer's global git config
+t="$(mktemp -d)"
+printf '[user]\n\tname = Global Person\n' > "$t/.gitconfig"
+cat > "$t/probe.sh" <<PROBE
+. "$HERE/lib/fixture.sh"
+git config --get user.name
+PROBE
+assert_eq "" "$(HOME="$t" XDG_CONFIG_HOME="$t" bash "$t/probe.sh")" "fixture.sh isolates global git config"
+rm -rf "$t"
+
 # --- fixture_tmpdir cleanup on exit
 t="$(mktemp -d)"
 cat > "$t/probe.sh" <<PROBE

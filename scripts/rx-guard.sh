@@ -12,6 +12,8 @@
 # Allows (never blocks): no active feature (a branch outside branch_pattern and no
 # .rx/local/active means "no active feature"), paths outside the repo, an invalid or
 # missing state.md (a warning is printed instead), an unreadable payload, other tools.
+# `rx-guard.sh --staged` is the git pre-commit form: no stdin; blocks (exit 2) when a staged path
+# (deletions too) matches source_globs while g2 is not approved. Does nothing on base_branch.
 # Targets macOS bash 3.2 + BSD userland. Deliberately no `set -e`.
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -26,6 +28,33 @@ _g_block() {
   exit 2
 }
 _g_warn() { printf 'rx-guard: warning: %s\n' "$*" >&2; }
+
+if [ "${1-}" = "--staged" ]; then
+  # Git pre-commit mode: plan-first over the staged paths (deletions included). No stdin.
+  cd "$(rx_root)" 2>/dev/null || exit 0
+  case "$(rx_cfg enforce_plan_first true)" in
+    false|False|FALSE|no|No|NO|off|Off|OFF|0) exit 0 ;;
+  esac
+  # On the base branch there is no active feature, whatever .rx/local/active says.
+  [ "$(git symbolic-ref --short -q HEAD 2>/dev/null)" != "$(rx_cfg base_branch main)" ] || exit 0
+  ID="$(rx_feature_id)" || exit 0
+  if ! reason="$(rx_state_valid "$ID" 2>&1)"; then
+    _g_warn "$reason"
+    exit 0
+  fi
+  case "$(rx_state_get "$ID" g2)" in
+    approved:*) exit 0 ;;
+  esac
+  while IFS= read -r -d '' path; do
+    case "$path" in
+      specs/*|docs/*|.rx/*) continue ;;
+    esac
+    if rx_glob_match "$path"; then
+      _g_block "G2 (plan approval) is not recorded for feature $ID; finish requirements and plan first (/rx:next) before committing $path"
+    fi
+  done < <(git diff --cached --name-only -z --no-renames 2>/dev/null)
+  exit 0
+fi
 
 INPUT="$(cat)"
 case "$INPUT" in

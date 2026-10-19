@@ -122,6 +122,53 @@ run_guard "$R" "$(payload "$R" Write "$R/specs/y/state.md" sub-1 'g1: approved:a
 run_guard "$R" "$(payload "$R" Write "$R/specs/y/state.md" sub-1 'g1: none')"; allowed "subagent creates state with g1 none"
 run_guard "$R" "$(payload "$R" Edit "$R/specs/x/plan.md" sub-1 'g3: approved:ai:2026-10-16')"; allowed "g-line in another spec file"
 
+# ---------- --staged (git pre-commit mode; no stdin payload) ----------
+run_staged() { # <repo>: sets ERR, RC
+  local ef
+  ef="$(mktemp "$RX_TMP_ROOT/err.XXXXXX")"
+  (cd "$1" && "$GUARD" --staged </dev/null >/dev/null 2>"$ef")
+  RC=$?
+  ERR="$(cat "$ef")"
+  rm -f "$ef"
+}
+stage() { # <repo> <path>: create the file and stage it
+  mkdir -p "$1/$(dirname "$2")"; printf 'x\n' >> "$1/$2"; git -C "$1" add -- "$2"
+}
+R="$(new_repo)"; mkstate "$R" x none
+stage "$R" src/A.java
+run_staged "$R"; blocked "staged: src before G2"
+assert_contains "$ERR" "G2" "staged: reason names G2"
+assert_contains "$ERR" "src/A.java" "staged: reason names the path"
+R="$(new_repo)"; mkstate "$R" x none
+stage "$R" docs/notes.md; stage "$R" specs/x/plan.md; stage "$R" .rx/config.yml
+run_staged "$R"; allowed "staged: docs/specs/.rx only before G2"
+R="$(new_repo)"; mkstate "$R" x "$APPROVED"
+stage "$R" src/A.java
+run_staged "$R"; allowed "staged: src after G2"
+R="$(new_repo)"; mkstate "$R" x none
+stage "$R" "src/with space.java"
+run_staged "$R"; blocked "staged: path with a space"
+R="$(new_repo)"; mkstate "$R" x none
+mkdir -p "$R/src"; printf 'x\n' > "$R/src/Old.java"; git -C "$R" add src/Old.java; git -C "$R" commit -q -m old
+git -C "$R" rm -q src/Old.java
+run_staged "$R"; blocked "staged: deleting a source file before G2"
+R="$(new_repo)"; mkstate "$R" x none
+run_staged "$R"; allowed "staged: nothing staged"
+R="$(new_repo)"; mkstate "$R" x none; fixture_config "$R" enforce_plan_first=false
+stage "$R" src/A.java
+run_staged "$R"; allowed "staged: enforce_plan_first false"
+R="$(new_repo)"; mkstate "$R" x none
+git -C "$R" checkout -q main; mkdir -p "$R/.rx/local"; printf 'x\n' > "$R/.rx/local/active"
+stage "$R" src/A.java
+run_staged "$R"; allowed "staged: on base branch .rx/local/active is ignored"
+R="$(new_repo)"; mkstate "$R" x none; printf 'junk\n' > "$R/specs/x/state.md"
+stage "$R" src/A.java
+run_staged "$R"; allowed "staged: invalid state.md warns, does not block"
+assert_contains "$ERR" "rx-guard:" "staged: invalid state warns"
+R="$(new_repo)"; rm "$R/.rx/config.yml"; stage "$R" src/A.java
+run_staged "$R"; allowed "staged: no config is a no-op"
+assert_eq "" "$ERR" "staged: no config is silent"
+
 # ---------- no-op ----------
 R="$(new_repo)"; rm "$R/.rx/config.yml"
 run_guard "$R" "$(payload "$R" Edit "$R/docs/knowledge/architecture.md")"; allowed "no config: no-op"

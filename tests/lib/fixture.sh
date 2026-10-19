@@ -6,6 +6,9 @@ if ! type rx_add_exit_hook >/dev/null 2>&1; then
   . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/assert.sh"
 fi
 
+# Fixtures must not depend on the developer's global or system git config.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+
 # One temp root per test process; removed on exit. Created at source time so
 # fixture_tmpdir stays usable inside $(...) subshells.
 RX_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rx-fixture.XXXXXX")"
