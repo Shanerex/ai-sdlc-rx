@@ -10,7 +10,7 @@
 
 **Spec:** `docs/plans/2026-10-16-rx-toolkit-plan.md`
 
-**Status:** REVISED after first review (decisions recorded at the bottom). Nothing has been built. This file is the task list. Each task gets expanded into 2–5 minute TDD steps (failing test, run, implement, run, commit) at execution time. See "How to read this" below.
+**Status:** v0.1.0 built on branch `build/rx-phase-1` (Phases 1-4 and 6; Phase 5, Codex, deferred). The checklist at the bottom records the final verification. This file is the task list. Each task gets expanded into 2–5 minute TDD steps (failing test, run, implement, run, commit) at execution time. See "How to read this" below.
 
 ## How to read this
 
@@ -364,7 +364,7 @@ Depends on: T2, T3, T9–T11.
 - Test: `tests/test_init_files.sh`
 
 **Interfaces:**
-- Deterministic part (script): creates `.rx/local/`, `docs/knowledge/{decisions,learnings}/`, `specs/`; appends `.rx/local/` to `.gitignore` idempotently; copies `scripts/` into `.rx/scripts/` and writes `.rx/scripts/.rx-version` (the plugin version); installs a pre-commit hook that runs `.rx/scripts/rx-guard.sh`, `.rx/scripts/rx-check.sh shared` and the test gate; refuses to overwrite an existing `.rx/config.yml` or `CLAUDE.md`. `rx-init-files.sh --refresh-scripts` re-copies `scripts/` and the version stamp without touching anything else.
+- Deterministic part (script): creates `.rx/local/`, `docs/knowledge/{decisions,learnings}/`, `specs/`; appends `.rx/local/` to `.gitignore` idempotently; copies `scripts/` into `.rx/scripts/`, copies `skills/rx-spec/templates/` into `.rx/scripts/templates/` (`rx-check.sh specs` derives required headings from them and looks in `<script-dir>/templates` when run from the copy), and writes `.rx/scripts/.rx-version` (the plugin version); installs a pre-commit hook that runs `.rx/scripts/rx-guard.sh`, `.rx/scripts/rx-check.sh shared` and the test gate, and that FAILS (rather than silently no-ops) when `.rx/config.yml` exists on `base_branch` but is missing in the working tree (otherwise a branch could disable every gate by deleting the config); refuses to overwrite an existing `.rx/config.yml` or `CLAUDE.md`. `rx-init-files.sh --refresh-scripts` re-copies `scripts/`, the templates and the version stamp without touching anything else.
 - Model part (command): reads the repo and fills `.rx/config.yml` (no coverage keys), writes CLAUDE.md (≤60 lines, 3-line rx pointer, no `@import`), and, for brownfield repos, seeds `architecture.md` (≤80 lines) from the codebase.
 
 **Done when:** the script test passes (idempotent on a second run, never clobbers, `.gitignore` deduplicated, `--refresh-scripts` updates a stale copy and the version stamp, the installed pre-commit hook runs from `.rx/scripts/` with no plugin present). In a scratch repo, `/rx:init` produces a valid config and a CLAUDE.md within the cap.
@@ -517,8 +517,60 @@ Depends on: T24.
 4. **Test harness:** plain bash, no `bats`, no `shellcheck`. Affects T1.
 5. **Codex:** deferred. No Codex access right now, so Phase 5 (T23–T25) is parked and v0.1 is tested and released on Claude Code only. Affects T26, T27.
 
+## Carry-over from Phase 1 (read before starting Phase 2)
+
+Phase 1 (T1–T8) is built and reviewed on branch `build/rx-phase-1`. These items came out of the final whole-branch review and execution rulings. They are assigned to the tasks that must handle them.
+
+**First thing in Phase 2 — "T8 follow-up" (one small fix, two tests):** `rx-check.sh done` checks that lane files exist with `[ -e ]` but checks their content with `[ -f ]` (`scripts/rx-check.sh` ~:629 vs ~:632/:651). A lane file that is a directory or a `/dev/null` symlink therefore satisfies "required" and skips the status, heading and task checks, so `done` can pass with zero tasks. Fix: require a regular file (report `must be a regular file` otherwise) and add tests for both cases. Also tidy: a missing `state.md` or feature dir prints several lines for one cause; leftover comment fragments at `rx-check.sh:21-22` and `rx-lib.sh:382-383`; `SKILL.md` should mention that knowledge entries must be regular files.
+
+- **T9 (guard):** the guard must also block Edit/Write on `.rx/config.yml`, `.rx/scripts/**`, and changes to `g1`–`g3` in `state.md` outside the orchestrator; otherwise an agent can set `enforce_plan_first: false` or write `g2: approved:…` itself. A branch name outside `branch_pattern` means "no active feature", so nothing is blocked — document that. Add one shared `source_globs` matcher to `rx-lib.sh` (define `**` semantics and list format; bash 3.2 has no globstar) and reuse it in T10.
+- **T10 (gate-tests):** first fix the deferred `rx_run_timeout` items: re-raise targets `$$` (the top-level shell) when called from a subshell; foreground `rm -f "$flag"` runs under `set -m` (a backgrounded caller can take the terminal); the flag file can be left behind in a narrow race; usage/unwritable-outfile statuses (2/1) look like command statuses; a command that exits 124 by itself is reported as a timeout. Call it at top level, not inside `$(...)`. Move the locale save/restore from `rx-check.sh` into `rx-lib.sh` so the hook does not duplicate it. Replace the `ps`-based assertions in `tests/test_lib.sh` (they match unrelated `sleep` processes) with recorded pids before parallelizing `tests/run.sh`.
+- **T11 (hooks.json):** hook `timeout` must be at least `test_timeout` plus a margin (the test command runs in its own process group and can be orphaned if the host kills the hook).
+- **T14 (feature):** make `_rx_valid_id` public, add the inverse of `rx_branch_id` (id → branch), and make `rx_state_valid` compare `feature:` with the directory id (deferred from T4).
+- **T15 (next):** the close phase should call `rx-check.sh done` only (it already runs `specs` and `shared`). The orchestrator finalizes `review.md` when it merges the qa/security files, and `quick.md` after the gate; the quick lane sets `g2` only (see `SKILL.md`).
+- **T17 (init) and CI wiring:**
+  - Gate inputs must come from the base branch: the config-deleted rule already in T17 generalizes to `.rx/scripts/*` and the templates (a branch that rewrites its own `rx-check.sh` to `exit 0` passes its own pre-commit and any CI that runs the PR head's copy).
+  - `shared` exits 2 on a non-pattern, non-base branch, so the human-only PR for `CLAUDE.md` / `architecture.md` cannot pass pre-commit as things stand. Define how that change lands without opening a rename-the-branch bypass.
+  - Install the pre-commit hook as a wrapper that execs the absolute path of `.rx/scripts/…` (a symlink breaks `dirname $0` lookup). CI must run from the repo root.
+  - Ignore `.rx/local/active` when on `base_branch`.
+  - Do not run all-dirs `specs` in pre-commit (about 0.2 s per feature dir, and `specs/` only grows).
+  - Before T17, isolate test fixtures from the developer's global git config (`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1` in `tests/lib/fixture.sh`).
+- **T2/T11/T26:** `marketplace.json` `owner.name` is a placeholder (`rx`); `plugin.json` has no `author`; the `claude --plugin-dir .` load check is still unverified (`claude plugin validate .` passes).
+- **Design plan drift (`docs/plans/2026-10-16-rx-toolkit-plan.md`, not edited):** line 87 says "tags in frontmatter" but the contract is a bare `tags: [a, b]` first line; line 133 says `base_branch...HEAD` but `shared` compares the merge base against the index, working tree and untracked files. Amend the plan when convenient.
+
+## Carry-over from Phase 2 (read before starting Phase 3)
+
+Phase 2 (T9-T16, plus the T8 follow-up) is built on branch `build/rx-phase-1`, tag `phase-2`.
+
+- **T17 (init), pre-commit and the guard:** `rx-guard.sh` is a PreToolUse hook. It reads the hook JSON on stdin and exits 0 when there is none, so calling it from git pre-commit as the T17 text says would check nothing. The pre-commit "plan first" check needs its own mode (for example `rx-guard.sh --staged`: any staged path matching `source_globs` while `g2` is not approved blocks the commit) with a test, or a separate small script. `rx-gate-tests.sh` works from pre-commit as is (no stdin = not `stop_hook_active`), but it acts only in phase `build`.
+- **T17:** the guard blocks Edit/Write on `.rx/config.yml` and `.rx/scripts/**`. `/rx:init` must write them through Bash scripts, not Edit/Write. `--refresh-scripts` must copy `rx-guard.sh`, `rx-gate-tests.sh`, `rx-new-feature.sh` and the templates too (`rx-new-feature.sh` looks in `<script-dir>/templates`).
+- **T19 (dogfood), unverified assumptions:** plugin agents are addressed as `rx:pm`, `rx:architect`, `rx:dev`, `rx:qa`, `rx:security` in `commands/next.md`; SendMessage resume of a finished two-pass agent; the main thread has no `agent_id` while subagents do (the guard relies on this to keep g1-g3 orchestrator-only); `claude --plugin-dir .` Stop hook timeout of 660 s.
+- **Config keys added:** `test_timeout` (seconds, default 600; the Stop/SubagentStop hook timeout in `hooks/hooks.json` is 660, so raise both together) and optional `test_globs` (same list format as `source_globs`). Document both in the README (T26).
+- **Deferred minors:** the guard resolves symlinked directories but not a symlinked final file (a symlink inside the repo pointing at `architecture.md`); `rx-gate-tests.sh` skips file names containing a newline; `security_review: plan+verify` is accepted but only `verify` is implemented; duplicate lines for one cause when `state.md` is missing in `rx-check.sh done` (carried from Phase 1).
+
 ## Self-review
 
 - **Spec coverage:** bundle table → T3, T9–T17. Layout → T1–T3, T11, T26 (Codex files deferred with T24). Per-project footprint → T14, T17. Token rules → T3, T12–T13 and measured in T21. Merge-safety → T7, T22. Workflow and gates → T15. Two-pass → T12, T15. Codex → T23–T25 (deferred). Verification list → T19, T22, T27 (Codex and coverage lines skipped).
 - **Placeholders:** none intentionally. Per-step TDD detail is deferred to execution time (stated in "How to read this").
 - **Names:** `rx_cfg`, `rx_feature_id`, `rx_state_get` and `rx_state_valid` are defined in T4 and used in T5, T9, T10, T14. `rx-check.sh <specs|shared|done>` is defined in T6.
+
+## Final verification (v0.1.0, 2026-10-19)
+
+Plan "Verification" section, ticked against evidence. Codex and coverage lines are skipped (deferred by decision).
+
+- [x] Bash tests cover status parsing and branch to feature-id resolution (`test_status.sh`, `test_lib.sh`).
+- [x] The guard blocks before G2 and allows after (`test_guard.sh`, plus the live probe in `tests/dogfood/results-node-ts.md`).
+- [x] The gate-tests skip and block paths (`test_gate_tests.sh`; a red test blocked Stop in the live probe).
+- [x] `rx-check.sh` specs, shared and done, each pass and fail (`test_check_specs.sh`, `test_check_shared.sh`, `test_check_done.sh`).
+- [x] Every script is a no-op without `.rx/config.yml` (`test_noop.sh`).
+- [x] `claude --plugin-dir .` loads and `claude plugin validate .` passes (warning: no author in `plugin.json`).
+- [x] End to end in a scratch repo: `/rx:init`, `/rx:feature add-health-endpoint`, `/rx:next` to done (`tests/dogfood/results-node-ts.md`).
+- [x] An Edit before G2 is blocked; a red test blocks Stop; `/rx:status` is correct; every spec file is within its cap.
+- [x] Human turns at most 7: 6 after init (7 when the PM asks a question), `tests/dogfood/comparison.md`.
+- [x] CLAUDE.md is byte-identical before and after (`shasum`).
+- [x] Multi-dev: two branches each adding a decision and a learning merge with zero non-code conflicts; a CLAUDE.md edit fails `rx-check.sh shared` (`test_multidev.sh`).
+- [ ] Codex (T23-T25): deferred, no Codex access.
+- [ ] Coverage checks: out of scope for v0.1.
+
+Known limits carried into the release: the plan-first hook covers the Edit tools only (a Bash write is caught by pre-commit, and `--no-verify` skips pre-commit, so CI must run the base branch's `rx-check.sh`); the `marketplace add` install route in the README was not executed; the v2 comparison is modeled, not a live run.
+

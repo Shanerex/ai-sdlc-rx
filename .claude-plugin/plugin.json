@@ -1,0 +1,5 @@
+{
+  "name": "rx",
+  "version": "0.1.0",
+  "description": "rx toolkit: spec-driven feature workflow commands, agents, and guard hooks for Claude Code"
+}

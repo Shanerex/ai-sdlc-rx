@@ -1,0 +1,14 @@
+{
+  "name": "rx",
+  "description": "Marketplace for the rx toolkit plugin",
+  "owner": {
+    "name": "rx"
+  },
+  "plugins": [
+    {
+      "name": "rx",
+      "source": "./",
+      "description": "rx toolkit: spec-driven feature workflow commands, agents, and guard hooks for Claude Code"
+    }
+  ]
+}
